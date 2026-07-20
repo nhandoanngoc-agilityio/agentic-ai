@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+
+# LangGraph
+.langgraph_api/
+
+# Data / runtime output — keep directory structure, ignore contents
+data/raw/*
+data/processed/*
+data/vectorstore/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/vectorstore/.gitkeep
+
+reports/*
+!reports/.gitkeep
+
+# OS
+.DS_Store
