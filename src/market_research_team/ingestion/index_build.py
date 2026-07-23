@@ -5,7 +5,6 @@ from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 
 from market_research_team.ingestion.chunking import HierarchicalChunk
 
@@ -18,6 +17,8 @@ def build_vectorstore(
     collection_name: str = "market_research",
 ) -> Chroma:
     """Embed leaf-level chunks and persist them to a local Chroma collection."""
+
+    from langchain_huggingface import HuggingFaceEmbeddings
 
     leaf_chunks = [chunk for chunk in chunks if chunk.level == "leaf"]
     if not leaf_chunks:
