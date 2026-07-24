@@ -1,5 +1,26 @@
+import pytest
+
+from market_research_team.agents.research import node as research_node_module
 from market_research_team.graph import graph
-from market_research_team.state import AgentState
+from market_research_team.state import AgentState, ResearchFinding
+
+
+def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int, int]:
+    findings: list[ResearchFinding] = [
+        {
+            "source": "mock://research-agent",
+            "content": f"Mock research finding for objective: {objective!r}",
+            "relevance_score": 0.9,
+        }
+    ]
+    return findings, 1, 1
+
+
+@pytest.fixture(autouse=True)
+def _stub_research_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the supervisor-routing test hermetic: no live LLM/vector-store calls."""
+
+    monkeypatch.setattr(research_node_module, "run_research_pipeline", _fake_research_pipeline)
 
 
 def _initial_state() -> AgentState:
