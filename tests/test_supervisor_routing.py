@@ -1,8 +1,9 @@
 import pytest
 
+from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.graph import graph
-from market_research_team.state import AgentState, ResearchFinding
+from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
 
 
 def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int, int]:
@@ -16,11 +17,24 @@ def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int,
     return findings, 1, 1
 
 
+def _fake_analytics_pipeline(
+    objective: str, findings: list[ResearchFinding]
+) -> list[AnalyticsResult]:
+    return [
+        {
+            "metric": "mock_finding_count",
+            "value": float(len(findings)),
+            "detail": "Mock analytics result for testing.",
+        }
+    ]
+
+
 @pytest.fixture(autouse=True)
-def _stub_research_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_agent_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the supervisor-routing test hermetic: no live LLM/vector-store calls."""
 
     monkeypatch.setattr(research_node_module, "run_research_pipeline", _fake_research_pipeline)
+    monkeypatch.setattr(analytics_node_module, "run_analytics_pipeline", _fake_analytics_pipeline)
 
 
 def _initial_state() -> AgentState:
