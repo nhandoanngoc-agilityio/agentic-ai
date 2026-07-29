@@ -3,7 +3,8 @@ import pytest
 from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.graph import graph
-from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
+from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding, RouteDecision
+from market_research_team.supervisor import router as supervisor_router_module
 
 
 def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int, int]:
@@ -29,12 +30,30 @@ def _fake_analytics_pipeline(
     ]
 
 
+def _fake_supervisor_decision(state: AgentState) -> RouteDecision:
+    """Reproduces the original deterministic research -> analytics -> reporting
+    -> FINISH pass, so this graph-level test verifies topology/wiring only.
+    Real handoff-decision logic is covered by test_supervisor_decision.py.
+    """
+
+    if not state.get("research_findings"):
+        return "research"
+    if not state.get("analytics_results"):
+        return "analytics"
+    if not state.get("report_path"):
+        return "reporting"
+    return "FINISH"
+
+
 @pytest.fixture(autouse=True)
 def _stub_agent_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the supervisor-routing test hermetic: no live LLM/vector-store calls."""
 
     monkeypatch.setattr(research_node_module, "run_research_pipeline", _fake_research_pipeline)
     monkeypatch.setattr(analytics_node_module, "run_analytics_pipeline", _fake_analytics_pipeline)
+    monkeypatch.setattr(
+        supervisor_router_module, "run_supervisor_decision", _fake_supervisor_decision
+    )
 
 
 def _initial_state() -> AgentState:
@@ -71,3 +90,26 @@ def test_supervisor_visits_agents_in_order() -> None:
         "reporting_agent",
         "supervisor",
     ]
+
+
+def test_supervisor_can_hand_off_back_to_research_before_finishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Proves the compiled graph itself supports bouncing between Research
+    and Analytics (not just the isolated decision function in
+    test_supervisor_decision.py) — the whole point of Day 7's handoff work.
+    """
+
+    decisions = iter(["research", "analytics", "research", "analytics", "reporting", "FINISH"])
+
+    def _bouncing_decision(_state: AgentState) -> RouteDecision:
+        return next(decisions)
+
+    monkeypatch.setattr(supervisor_router_module, "run_supervisor_decision", _bouncing_decision)
+
+    result = graph.invoke(_initial_state())
+
+    agent_names = [m.name for m in result["messages"] if getattr(m, "name", None)]
+    assert agent_names.count("research_agent") == 2
+    assert agent_names.count("analytics_agent") == 2
+    assert result["next"] == "FINISH"
