@@ -1,6 +1,7 @@
 import pytest
 
 from market_research_team.agents.analytics import node as analytics_node_module
+from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.graph import graph
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding, RouteDecision
@@ -30,6 +31,15 @@ def _fake_analytics_pipeline(
     ]
 
 
+async def _fake_reporting_pipeline(
+    objective: str, findings: list[ResearchFinding], results: list[AnalyticsResult]
+) -> str:
+    """Async on purpose: `reporting_node` wraps the real (async) pipeline in
+    `asyncio.run(...)`, so the stub must also be awaitable."""
+
+    return "reports/mock-report.md"
+
+
 def _fake_supervisor_decision(state: AgentState) -> RouteDecision:
     """Reproduces the original deterministic research -> analytics -> reporting
     -> FINISH pass, so this graph-level test verifies topology/wiring only.
@@ -51,6 +61,9 @@ def _stub_agent_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(research_node_module, "run_research_pipeline", _fake_research_pipeline)
     monkeypatch.setattr(analytics_node_module, "run_analytics_pipeline", _fake_analytics_pipeline)
+    monkeypatch.setattr(
+        reporting_node_module, "run_reporting_pipeline", _fake_reporting_pipeline
+    )
     monkeypatch.setattr(
         supervisor_router_module, "run_supervisor_decision", _fake_supervisor_decision
     )
