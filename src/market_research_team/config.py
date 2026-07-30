@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     raw_dir: Path = _PROJECT_ROOT / "data" / "raw"
     processed_dir: Path = _PROJECT_ROOT / "data" / "processed"
     vectorstore_dir: Path = _PROJECT_ROOT / "data" / "vectorstore"
+    reports_dir: Path = _PROJECT_ROOT / "reports"
 
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     section_chunk_size: int = 2000
