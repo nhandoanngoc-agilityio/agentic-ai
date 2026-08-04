@@ -60,6 +60,15 @@ def _state(
     }
 
 
+def test_error_in_state_short_circuits_to_finish_without_calling_llm() -> None:
+    state = _state(research_findings=[_FINDING])
+    state["error"] = "research failed: boom"
+
+    result = decide_next_step(state, _ExplodingLLM())  # type: ignore[arg-type]
+
+    assert result == "FINISH"
+
+
 def test_routes_to_research_when_no_findings_without_calling_llm() -> None:
     result = decide_next_step(_state(), _ExplodingLLM())  # type: ignore[arg-type]
 

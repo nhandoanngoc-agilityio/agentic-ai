@@ -61,15 +61,18 @@ def decide_next_step(state: AgentState, llm: BaseChatModel) -> RouteDecision:
     """Decide the next node, allowing handoffs back to Research or Analytics.
 
     Hard prerequisites are enforced in code rather than left to the LLM:
-    Analytics needs at least one research pass to have something to
-    analyze, and once a report has been written there's nothing left to
-    orchestrate. Within those constraints, the LLM picks whether to
-    proceed or hand back for another round — capped by
-    `_MAX_ROUTING_VISITS` so a bad decision can't loop forever, and
-    clamped to the currently allowed options so a malformed answer can't
-    route somewhere invalid. Falls back to the safest allowed option if
-    the LLM call itself fails.
+    a failed node ends the run immediately, Analytics needs at least one
+    research pass to have something to analyze, and once a report has been
+    written there's nothing left to orchestrate. Within those constraints,
+    the LLM picks whether to proceed or hand back for another round —
+    capped by `_MAX_ROUTING_VISITS` so a bad decision can't loop forever,
+    and clamped to the currently allowed options so a malformed answer
+    can't route somewhere invalid. Falls back to the safest allowed option
+    if the LLM call itself fails.
     """
+
+    if state.get("error"):
+        return "FINISH"
 
     if not state.get("research_findings"):
         return "research"

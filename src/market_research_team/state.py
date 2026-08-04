@@ -1,6 +1,6 @@
 """Unified state schema shared across the supervisor and every agent node."""
 
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -33,3 +33,4 @@ class AgentState(TypedDict):
     research_findings: list[ResearchFinding]
     analytics_results: list[AnalyticsResult]
     report_path: str | None
+    error: NotRequired[str | None]

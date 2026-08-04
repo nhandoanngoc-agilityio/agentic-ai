@@ -18,6 +18,7 @@ venv/
 data/raw/*
 data/processed/*
 data/vectorstore/*
+data/checkpoints.sqlite
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/vectorstore/.gitkeep
