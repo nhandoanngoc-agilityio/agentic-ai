@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     llm_provider: Literal["anthropic", "openai"] = "anthropic"
     anthropic_model: str = "claude-sonnet-5"
-    openai_model: str = "gpt-5.6"  # verify against OpenAI's current model list before relying on it
+    openai_model: str = "gpt-4o-mini"  # broadly available; model access varies by account/tier
     reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     recursion_limit: int = 20
