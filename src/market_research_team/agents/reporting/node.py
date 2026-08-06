@@ -4,12 +4,11 @@ local MCP filesystem server."""
 import asyncio
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from market_research_team.agents.reporting.mcp_client import load_reporting_tools
-from market_research_team.config import settings
+from market_research_team.llm import get_chat_model
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
 
 _SYSTEM_PROMPT = (
@@ -104,7 +103,7 @@ async def run_reporting_pipeline(
 ) -> str:
     """Draft the report and write it via the local MCP server. Returns the written path."""
 
-    llm = ChatAnthropic(model=settings.query_rewrite_model)
+    llm = get_chat_model()
     report_markdown = draft_report(objective, findings, results, llm)
 
     tools = await load_reporting_tools()

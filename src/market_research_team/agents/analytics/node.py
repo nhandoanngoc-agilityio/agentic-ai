@@ -2,13 +2,12 @@
 
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
-from market_research_team.config import settings
+from market_research_team.llm import get_chat_model
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
 
 _MAX_TOOL_ITERATIONS = 4
@@ -109,7 +108,7 @@ def run_analytics_pipeline(
 ) -> list[AnalyticsResult]:
     """Production wiring: the real Claude model bound to the native math/stat tools."""
 
-    llm = ChatAnthropic(model=settings.query_rewrite_model)
+    llm = get_chat_model()
     return run_tool_calling_loop(llm, ANALYTICS_TOOLS, objective, findings)
 
 

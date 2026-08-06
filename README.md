@@ -46,7 +46,7 @@ recursion and catches `GraphRecursionError`.
 ## Stack
 
 - [LangGraph](https://github.com/langchain-ai/langgraph) — state machine / agent orchestration
-- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-anthropic` — LLM layer (Claude)
+- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-anthropic` / `langchain-openai` — LLM layer (Claude by default, OpenAI via `LLM_PROVIDER=openai`)
 - `sentence-transformers` / `langchain-huggingface` — local embeddings + cross-encoder reranking
 - `langchain-chroma` / `chromadb` — local vector store
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) + `langchain-mcp-adapters` — filesystem-write tool server/client
@@ -61,6 +61,7 @@ src/market_research_team/
 ├── graph.py                  # graph assembly, error-boundary wiring, run_graph() safe entrypoint
 ├── state.py                  # AgentState TypedDict schema
 ├── config.py                 # pydantic-settings: model, paths, thresholds
+├── llm.py                    # chat model factory (LLM_PROVIDER: anthropic | openai)
 ├── guardrails.py             # per-node error-boundary wrapper
 ├── supervisor/
 │   └── router.py             # LLM-driven routing + Research/Analytics handoff
@@ -104,7 +105,7 @@ docs/          # architecture notes
 ### Prerequisites
 
 - Python 3.11+
-- An [Anthropic API key](https://console.anthropic.com/) (for the LLM calls — query rewriting, supervisor routing, analytics, and report drafting)
+- An API key for one LLM provider — [Anthropic](https://console.anthropic.com/) (default) or [OpenAI](https://platform.openai.com/api-keys) — for the LLM calls made by query rewriting, supervisor routing, analytics, and report drafting
 
 ### 1. Install
 
@@ -125,8 +126,9 @@ Postgres checkpointer, add the `prod` extra: `pip install -e ".[dev,prod]"`.
 cp .env.example .env
 ```
 
-Then edit `.env` and set `ANTHROPIC_API_KEY`. Everything else has a
-working default — see [Configuration](#configuration) below.
+Then edit `.env` and set `ANTHROPIC_API_KEY` (default provider) — or set
+`LLM_PROVIDER=openai` and `OPENAI_API_KEY` to use OpenAI instead. Everything
+else has a working default — see [Configuration](#configuration) below.
 
 ### 3. Seed the vector store
 
@@ -189,13 +191,18 @@ and can be overridden via `.env` or real environment variables. From
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | *(required)* | Claude access for every LLM-driven node |
+| `LLM_PROVIDER` | `anthropic` | `anthropic` or `openai` — selects which chat model `llm.get_chat_model()` builds |
+| `ANTHROPIC_API_KEY` | *(required if `LLM_PROVIDER=anthropic`)* | Claude access for every LLM-driven node |
+| `OPENAI_API_KEY` | *(required if `LLM_PROVIDER=openai`)* | OpenAI access for every LLM-driven node |
 | `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` / `LANGCHAIN_PROJECT` | off | Optional LangSmith tracing |
 | `VECTORSTORE_DIR` | `./data/vectorstore` | Chroma persistence directory |
 | `REPORTS_DIR` | `./reports` | Where the MCP server writes markdown reports |
 | `DATABASE_URL` | unset | If set, `get_checkpointer()` uses Postgres instead of the local SQLite file |
 
-Other tunables (embedding/reranker model names, chunk sizes, recursion
-limit, checkpoint DB path) have sensible defaults in `config.py` and are
-generally not something you need to touch to run the demo.
+Other tunables (`anthropic_model` / `openai_model` names, embedding/reranker
+model names, chunk sizes, recursion limit, checkpoint DB path) have
+sensible defaults in `config.py` and are generally not something you need
+to touch to run the demo. Every node builds its LLM through
+`llm.get_chat_model()` rather than importing a provider class directly, so
+`LLM_PROVIDER` is the only thing that needs to change to switch providers.
 
