@@ -71,12 +71,13 @@ src/market_research_team/
 │   └── reporting/              # drafts report + MCP client wiring
 ├── ingestion/                 # loaders, hierarchical/recursive chunking, index build
 ├── mcp_server/                 # local MCP server exposing filesystem write ops
-└── checkpointing/               # SQLite / Postgres checkpointer factory
+├── checkpointing/               # SQLite / Postgres checkpointer factory
+└── evaluation/                   # golden dataset + offline prompt-eval harness
 
-data/          # raw → processed documents, persisted vector store, checkpoint DB
+data/          # raw → processed documents, persisted vector store, checkpoint DB, eval results
 reports/       # markdown reports written by the MCP server
-scripts/       # seed_vectorstore.py, run_graph_cli.py
-tests/         # pytest suite (68 tests)
+scripts/       # seed_vectorstore.py, run_graph_cli.py, run_evals.py
+tests/         # pytest suite
 docs/          # architecture notes
 ```
 
@@ -151,7 +152,7 @@ pytest
 ruff check src tests scripts
 ```
 
-The test suite (68 tests) is hermetic — LLM calls, the vector store, and
+The test suite (95 tests) is hermetic — LLM calls, the vector store, and
 the MCP subprocess are all faked or run against real-but-local fixtures,
 so `pytest` doesn't require `ANTHROPIC_API_KEY` or the seeded vector store
 from step 3. A handful of tests do spawn the real local MCP server
@@ -182,6 +183,32 @@ printed Studio URL to run it interactively, inspect state at each step,
 and time-travel through checkpoints. `langgraph dev` manages its own
 persistence — it doesn't use `checkpointing/store.py`, which is for
 standalone use outside the dev server (see `run_graph()` in `graph.py`).
+
+## Prompt evaluation regression suite
+
+`pytest` proves the *code* is correct (routing logic, retrieval merging,
+tool execution, error boundaries) using fake LLMs — it never calls a real
+model. `scripts/run_evals.py` proves the *prompts* are still behaving,
+using real LLM calls against a small golden dataset grounded in the
+sample documents (e.g. Acme's real $49/seat price, Globex's real
+$150K–$400K ACV range) instead of synthetic expectations. It checks
+structural/grounded properties (query count, keyword coverage, whether a
+computed number actually derives from the source data) rather than exact
+text, since LLM output isn't deterministic.
+
+Run it after changing a system prompt, switching models, or before a
+release — not on every commit, since it costs real API calls:
+
+```bash
+python scripts/run_evals.py                  # current LLM_PROVIDER
+python scripts/run_evals.py --provider openai
+python scripts/run_evals.py --compare         # anthropic AND openai, side by side
+```
+
+Exits non-zero if any case fails, and writes a timestamped JSON report to
+`data/eval_results/`. The full-pipeline case needs the vector store seeded
+(step 3 above). See `src/market_research_team/evaluation/golden_dataset.py`
+to add cases.
 
 ## Configuration
 
