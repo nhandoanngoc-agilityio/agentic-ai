@@ -76,7 +76,7 @@ src/market_research_team/
 
 data/          # raw → processed documents, persisted vector store, checkpoint DB, eval results
 reports/       # markdown reports written by the MCP server
-scripts/       # seed_vectorstore.py, run_graph_cli.py, run_evals.py
+scripts/       # setup_env.py, seed_vectorstore.py, run_graph_cli.py, run_evals.py
 tests/         # pytest suite
 docs/          # architecture notes
 ```
@@ -100,6 +100,41 @@ docs/          # architecture notes
 | Custom local MCP server: filesystem write operations |
 | Reporting Agent ↔ MCP client wiring → markdown report output |
 | Production guardrails: recursion limits, error boundaries, Postgres checkpointer, end-to-end test in LangGraph Studio |
+
+### Post-sprint — Hardening & productionization
+| Focus |
+|---|
+| Final documentation pass + step-by-step run instructions |
+| GitLab CI: automated `ruff` + `pytest` on every push (currently disabled — see [Known limitations](#known-limitations)) |
+| Live end-to-end validation against real API credentials (Anthropic and OpenAI) |
+| Config-driven LLM provider (`LLM_PROVIDER=anthropic\|openai`) instead of a hardcoded model |
+| Prompt evaluation regression suite: golden dataset + real-LLM harness, distinct from the hermetic `pytest` suite |
+| `scripts/setup_env.py`: one-shot install + fail-fast environment validation |
+
+## Results
+
+Verified against this repo's current state, not aspirational:
+
+- **Test suite**: 103/103 `pytest` tests passing, `ruff check src tests scripts` clean — hermetic,
+  no API key or seeded vector store required.
+- **Live end-to-end run** (real OpenAI credentials, `gpt-5-mini`, objective *"Assess Acme vs Globex
+  pricing strategy and recommend a competitive positioning"*): completed in one pass via
+  `scripts/run_graph_cli.py` — 5 research findings gathered across 3 Research Agent visits, 7
+  analytics tool calls, one report written to disk through the real MCP filesystem server. The
+  supervisor routed Research → Analytics → Research → Research → Reporting → FINISH, staying well
+  under the recursion/visit cap. The generated report correctly derived numbers straight from the
+  source documents with no hallucination, e.g.:
+
+  > Globex deals are negotiated and bundled with mandatory implementation services. Industry
+  > estimates place typical annual contract value (ACV) between $150K and $400K.
+  > Mean ACV ≈ $275,000. ACV range = $250,000 (150K → 400K), a 166.7% increase from the low to
+  > high end.
+
+- **Prompt evaluation regression suite** (`python scripts/run_evals.py`, real OpenAI credentials):
+  7/7 cases passed. Notably `analytics/globex_acv_range` — the model called 7 real statistics
+  tools, and every reported figure (min $150K, max $400K, mean $275K, range $250K) traced back to
+  the source text rather than being invented, which is exactly the class of regression this suite
+  exists to catch.
 
 ## Getting started
 
@@ -131,6 +166,14 @@ Then edit `.env` and set `ANTHROPIC_API_KEY` (default provider) — or set
 `LLM_PROVIDER=openai` and `OPENAI_API_KEY` to use OpenAI instead. Everything
 else has a working default — see [Configuration](#configuration) below.
 
+Once `.env` is set, `python scripts/setup_env.py` re-runs the install from
+step 1 and then validates the result: it imports every critical package
+(LangGraph, the configured LLM provider, Chroma, MCP, etc.) and confirms
+`.env` has the API key `LLM_PROVIDER` actually needs, failing fast with an
+itemized list instead of a cryptic error later. Use `--skip-install` to
+validate an existing environment without reinstalling, or `--prod` to also
+cover the Postgres checkpointer extra.
+
 ### 3. Seed the vector store
 
 The Research Agent retrieves against a local Chroma index built from the
@@ -152,7 +195,7 @@ pytest
 ruff check src tests scripts
 ```
 
-The test suite (95 tests) is hermetic — LLM calls, the vector store, and
+The test suite (103 tests) is hermetic — LLM calls, the vector store, and
 the MCP subprocess are all faked or run against real-but-local fixtures,
 so `pytest` doesn't require `ANTHROPIC_API_KEY` or the seeded vector store
 from step 3. A handful of tests do spawn the real local MCP server
@@ -232,4 +275,20 @@ sensible defaults in `config.py` and are generally not something you need
 to touch to run the demo. Every node builds its LLM through
 `llm.get_chat_model()` rather than importing a provider class directly, so
 `LLM_PROVIDER` is the only thing that needs to change to switch providers.
+
+## Known limitations
+
+Honest gaps, not hidden:
+
+- **CI is currently disabled.** `.gitlab-ci.yml` was added in `fdde9ff` (ran `ruff` + `pytest` on
+  every push) but was later commented out and then emptied (`3d08014`, `97f7b2f`). No automated
+  gate currently runs on push — needs a decision: restore it or remove the dead file.
+- **The Postgres checkpointer is unverified against a real database.** `get_checkpointer()`
+  supports `DATABASE_URL`, but it's only been exercised via code review, not a live Postgres
+  instance.
+- **No PR/branch review workflow.** All work has been committed directly to `main`. `main` is
+  branch-protected against force-push, but nothing currently requires review before a merge.
+- **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
+  programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
+  been clicked through interactively.
 
