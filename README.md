@@ -105,7 +105,7 @@ docs/          # architecture notes
 | Focus |
 |---|
 | Final documentation pass + step-by-step run instructions |
-| GitLab CI: automated `ruff` + `pytest` on every push (currently disabled — see [Known limitations](#known-limitations)) |
+| GitLab CI: automated `ruff` + `pytest` on every push (restored) |
 | Live end-to-end validation against real API credentials (Anthropic and OpenAI) |
 | Config-driven LLM provider (`LLM_PROVIDER=anthropic\|openai`) instead of a hardcoded model |
 | Prompt evaluation regression suite: golden dataset + real-LLM harness, distinct from the hermetic `pytest` suite |
@@ -246,12 +246,20 @@ release — not on every commit, since it costs real API calls:
 python scripts/run_evals.py                  # current LLM_PROVIDER
 python scripts/run_evals.py --provider openai
 python scripts/run_evals.py --compare         # anthropic AND openai, side by side
+python scripts/run_evals.py --langsmith       # also run LangSmith dataset sync + LLM-judge experiments
 ```
 
 Exits non-zero if any case fails, and writes a timestamped JSON report to
 `data/eval_results/`. The full-pipeline case needs the vector store seeded
 (step 3 above). See `src/market_research_team/evaluation/golden_dataset.py`
 to add cases.
+
+`--langsmith` requires `LANGSMITH_API_KEY` (see [Configuration](#configuration)). It layers
+LLM-judge scoring on top of — not instead of — the deterministic checks above: each of the 5
+categories gets its cases mirrored into a LangSmith Dataset
+(`market-research-team-<category>`) and scored in a LangSmith Experiment by both the existing
+deterministic check and a category-tailored LLM judge (relevance / groundedness / appropriateness
+depending on category). See `src/market_research_team/evaluation/langsmith_eval.py`.
 
 ## Configuration
 
@@ -265,6 +273,7 @@ and can be overridden via `.env` or real environment variables. From
 | `ANTHROPIC_API_KEY` | *(required if `LLM_PROVIDER=anthropic`)* | Claude access for every LLM-driven node |
 | `OPENAI_API_KEY` | *(required if `LLM_PROVIDER=openai`)* | OpenAI access for every LLM-driven node |
 | `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` / `LANGCHAIN_PROJECT` | off | Optional LangSmith tracing |
+| `LANGSMITH_API_KEY` | unset | Required for `scripts/run_evals.py --langsmith` (dataset sync + LLM-judge experiments) |
 | `VECTORSTORE_DIR` | `./data/vectorstore` | Chroma persistence directory |
 | `REPORTS_DIR` | `./reports` | Where the MCP server writes markdown reports |
 | `DATABASE_URL` | unset | If set, `get_checkpointer()` uses Postgres instead of the local SQLite file |
@@ -280,9 +289,6 @@ to touch to run the demo. Every node builds its LLM through
 
 Honest gaps, not hidden:
 
-- **CI is currently disabled.** `.gitlab-ci.yml` was added in `fdde9ff` (ran `ruff` + `pytest` on
-  every push) but was later commented out and then emptied (`3d08014`, `97f7b2f`). No automated
-  gate currently runs on push — needs a decision: restore it or remove the dead file.
 - **The Postgres checkpointer is unverified against a real database.** `get_checkpointer()`
   supports `DATABASE_URL`, but it's only been exercised via code review, not a live Postgres
   instance.
