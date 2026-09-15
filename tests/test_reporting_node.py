@@ -15,8 +15,10 @@ _RESULT = {"metric": "mean", "value": 49.0, "detail": "mean([49]) = 49.0"}
 class _FakeLLM:
     def __init__(self, content: str) -> None:
         self._content = content
+        self.last_messages: list[object] | None = None
 
-    def invoke(self, _messages: list[object]) -> AIMessage:
+    def invoke(self, messages: list[object]) -> AIMessage:
+        self.last_messages = messages
         return AIMessage(content=self._content)
 
 
@@ -46,6 +48,29 @@ def test_draft_report_falls_back_on_blank_llm_output() -> None:
     result = draft_report("Assess pricing", [_FINDING], [_RESULT], _FakeLLM("   "))  # type: ignore[arg-type]
 
     assert "# Research Report" in result
+
+
+def test_draft_report_folds_reviewer_feedback_into_the_prompt() -> None:
+    llm = _FakeLLM("# Revised Report")
+
+    result = draft_report(
+        "Assess pricing", [_FINDING], [_RESULT], llm, feedback="Add a pricing comparison table."  # type: ignore[arg-type]
+    )
+
+    assert result == "# Revised Report"
+    assert llm.last_messages is not None
+    human_message = llm.last_messages[1]
+    assert "Add a pricing comparison table." in human_message.content
+
+
+def test_draft_report_omits_feedback_section_when_none_given() -> None:
+    llm = _FakeLLM("# Draft")
+
+    draft_report("Assess pricing", [_FINDING], [_RESULT], llm)  # type: ignore[arg-type]
+
+    assert llm.last_messages is not None
+    human_message = llm.last_messages[1]
+    assert "reviewer rejected" not in human_message.content
 
 
 def test_draft_report_handles_no_findings_or_results() -> None:

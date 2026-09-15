@@ -1,11 +1,19 @@
 """Manual end-to-end invocation of the Market & Competitor Research Analyst
 Team graph, using the production-guardrail safe entrypoint (`run_graph`).
 
+The Reporting Agent always pauses for human approval before writing a
+report to disk, so this always runs against a checkpointer (SQLite/Postgres
+per `.env`) -- there's no way to resume a paused run otherwise.
+
     python scripts/run_graph_cli.py "Assess Acme vs Globex pricing strategy"
-    python scripts/run_graph_cli.py "..." --thread-id demo-1  # persist via checkpointer
+    python scripts/run_graph_cli.py "..." --thread-id demo-1  # resume a specific thread later
 """
 
 import argparse
+import uuid
+from typing import Any
+
+from langgraph.types import Command
 
 from market_research_team.checkpointing.store import get_checkpointer
 from market_research_team.graph import build_production_graph, run_graph
@@ -23,13 +31,29 @@ def _initial_state(objective: str) -> AgentState:
     }
 
 
+def _prompt_for_approval(interrupt_value: dict[str, Any]) -> dict[str, Any]:
+    print(
+        f"\n--- Reporting Agent wants to write '{interrupt_value.get('filename')}' "
+        f"(review round {interrupt_value.get('attempt')}/{interrupt_value.get('max_attempts')}) ---"
+    )
+    print(interrupt_value.get("content", ""))
+    print("--- end of draft ---")
+
+    answer = input("Approve this write to disk? [y/N]: ").strip().lower()
+    if answer in ("y", "yes"):
+        return {"approved": True}
+
+    feedback = input("Feedback for the next draft (optional, Enter to skip): ").strip()
+    return {"approved": False, "feedback": feedback or None}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("objective", help="Research objective to run the team against.")
     parser.add_argument(
         "--thread-id",
         default=None,
-        help="If set, persist/resume this run via a SQLite (or Postgres) checkpointer.",
+        help="Resume this specific thread id; a random one is generated otherwise.",
     )
     parser.add_argument(
         "--recursion-limit",
@@ -39,16 +63,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    compiled_graph = None
-    if args.thread_id:
-        compiled_graph = build_production_graph(get_checkpointer())
+    thread_id = args.thread_id or str(uuid.uuid4())
+    compiled_graph = build_production_graph(get_checkpointer())
 
     result = run_graph(
         _initial_state(args.objective),
         compiled_graph=compiled_graph,
-        thread_id=args.thread_id,
+        thread_id=thread_id,
         recursion_limit=args.recursion_limit,
     )
+
+    while result.get("__interrupt__"):
+        decision = _prompt_for_approval(result["__interrupt__"][0].value)
+        result = run_graph(
+            Command(resume=decision),
+            compiled_graph=compiled_graph,
+            thread_id=thread_id,
+            recursion_limit=args.recursion_limit,
+        )
 
     print(f"next: {result.get('next')}")
     print(f"error: {result.get('error')}")
