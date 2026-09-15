@@ -1,6 +1,7 @@
 """Central configuration: paths and ingestion/embedding defaults."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,7 +21,9 @@ class Settings(BaseSettings):
     leaf_chunk_size: int = 800
     leaf_chunk_overlap: int = 120
 
-    query_rewrite_model: str = "claude-sonnet-5"
+    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    anthropic_model: str = "claude-sonnet-5"
+    openai_model: str = "gpt-4o-mini"  # broadly available; model access varies by account/tier
     reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     recursion_limit: int = 20

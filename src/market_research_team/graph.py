@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
 from market_research_team.agents.analytics.node import analytics_node
 from market_research_team.agents.reporting.node import reporting_node
@@ -60,7 +61,7 @@ def build_production_graph(checkpointer: BaseCheckpointSaver[Any]):
 
 
 def run_graph(
-    initial_state: AgentState,
+    initial_state: AgentState | Command[Any],
     *,
     compiled_graph: Any = None,
     thread_id: str | None = None,
@@ -70,6 +71,13 @@ def run_graph(
     `GraphRecursionError` into the same `error`-populated state shape the
     per-node error boundaries already produce, instead of letting it
     propagate as a raw exception up to the caller.
+
+    `initial_state` may also be a `Command` (e.g. `Command(resume=...)`) to
+    resume a run paused on a human-approval interrupt (see
+    `agents/reporting/node.py`) — this requires `compiled_graph` to carry a
+    real checkpointer and the same `thread_id` the paused run used. The
+    returned state includes an `__interrupt__` key when the run pauses
+    again rather than reaching `FINISH`.
     """
 
     target_graph = compiled_graph if compiled_graph is not None else graph

@@ -2,6 +2,9 @@
 
 from typing import Any
 
+import pytest
+from langgraph.errors import GraphInterrupt
+
 from market_research_team.guardrails import with_error_boundary
 from market_research_team.state import AgentState
 
@@ -50,6 +53,20 @@ def test_with_error_boundary_applies_fallback_updates_on_error() -> None:
 
     assert result["next"] == "FINISH"
     assert result["error"] == "supervisor failed: boom"
+
+
+def test_with_error_boundary_reraises_graph_interrupt_instead_of_swallowing_it() -> None:
+    """A human-in-the-loop `interrupt()` call raises `GraphInterrupt`, which
+    LangGraph's runtime must see -- if this bare `except Exception` caught
+    it instead, every reviewer pause would look like a node crash."""
+
+    def _node(_state: AgentState) -> dict[str, Any]:
+        raise GraphInterrupt()
+
+    wrapped = with_error_boundary("reporting", _node)
+
+    with pytest.raises(GraphInterrupt):
+        wrapped(_state())
 
 
 def test_with_error_boundary_does_not_interfere_on_success_path() -> None:

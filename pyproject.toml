@@ -12,8 +12,10 @@ dependencies = [
     # --- LangChain core + model provider ---
     "langchain>=1.3.14,<2.0",
     "langchain-core>=0.4",
-    "langchain-anthropic>=0.4",           # Claude as the driving LLM
+    "langchain-anthropic>=0.4",           # Claude provider
+    "langchain-openai>=1.4.1",             # OpenAI provider (LLM_PROVIDER=openai)
     "langchain-text-splitters>=0.4",      # recursive/hierarchical chunking
+    "langsmith>=0.6,<1.0",                # LangSmith client: tracing + eval datasets/experiments
 
     # --- Retrieval / vector store / reranking ---
     "langchain-chroma>=0.3",

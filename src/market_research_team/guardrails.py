@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain_core.messages import AIMessage
+from langgraph.errors import GraphBubbleUp
 
 from market_research_team.state import AgentState
 
@@ -44,6 +45,13 @@ def with_error_boundary(
     def _wrapped(state: AgentState) -> dict[str, Any]:
         try:
             return node_fn(state)
+        except GraphBubbleUp:
+            # LangGraph's own control flow (interrupt(), Send, etc.) is
+            # implemented as an exception that must reach the runtime
+            # unchanged -- a bare `except Exception` below would otherwise
+            # swallow a human-in-the-loop interrupt and mistake it for a
+            # node crash.
+            raise
         except Exception as exc:
             logger.exception("Node %r failed", node_name)
             update: dict[str, Any] = {

@@ -3,13 +3,12 @@ back to Research or Analytics based on how the run is progressing."""
 
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
-from market_research_team.config import settings
+from market_research_team.llm import get_chat_model
 from market_research_team.state import AgentState, RouteDecision
 
 _MAX_ROUTING_VISITS = 6
@@ -98,7 +97,7 @@ def decide_next_step(state: AgentState, llm: BaseChatModel) -> RouteDecision:
 def run_supervisor_decision(state: AgentState) -> RouteDecision:
     """Production wiring: the real Claude model driving `decide_next_step`."""
 
-    llm = ChatAnthropic(model=settings.query_rewrite_model)
+    llm = get_chat_model()
     return decide_next_step(state, llm)
 
 

@@ -19,9 +19,11 @@ data/raw/*
 data/processed/*
 data/vectorstore/*
 data/checkpoints.sqlite
+data/eval_results/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/vectorstore/.gitkeep
+!data/eval_results/.gitkeep
 
 reports/*
 !reports/.gitkeep

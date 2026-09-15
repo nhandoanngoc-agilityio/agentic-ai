@@ -46,7 +46,7 @@ recursion and catches `GraphRecursionError`.
 ## Stack
 
 - [LangGraph](https://github.com/langchain-ai/langgraph) — state machine / agent orchestration
-- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-anthropic` — LLM layer (Claude)
+- [LangChain](https://github.com/langchain-ai/langchain) + `langchain-anthropic` / `langchain-openai` — LLM layer (Claude by default, OpenAI via `LLM_PROVIDER=openai`)
 - `sentence-transformers` / `langchain-huggingface` — local embeddings + cross-encoder reranking
 - `langchain-chroma` / `chromadb` — local vector store
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) + `langchain-mcp-adapters` — filesystem-write tool server/client
@@ -61,6 +61,7 @@ src/market_research_team/
 ├── graph.py                  # graph assembly, error-boundary wiring, run_graph() safe entrypoint
 ├── state.py                  # AgentState TypedDict schema
 ├── config.py                 # pydantic-settings: model, paths, thresholds
+├── llm.py                    # chat model factory (LLM_PROVIDER: anthropic | openai)
 ├── guardrails.py             # per-node error-boundary wrapper
 ├── supervisor/
 │   └── router.py             # LLM-driven routing + Research/Analytics handoff
@@ -70,12 +71,13 @@ src/market_research_team/
 │   └── reporting/              # drafts report + MCP client wiring
 ├── ingestion/                 # loaders, hierarchical/recursive chunking, index build
 ├── mcp_server/                 # local MCP server exposing filesystem write ops
-└── checkpointing/               # SQLite / Postgres checkpointer factory
+├── checkpointing/               # SQLite / Postgres checkpointer factory
+└── evaluation/                   # golden dataset + offline prompt-eval harness
 
-data/          # raw → processed documents, persisted vector store, checkpoint DB
+data/          # raw → processed documents, persisted vector store, checkpoint DB, eval results
 reports/       # markdown reports written by the MCP server
-scripts/       # seed_vectorstore.py, run_graph_cli.py
-tests/         # pytest suite (68 tests)
+scripts/       # setup_env.py, seed_vectorstore.py, run_graph_cli.py, run_evals.py
+tests/         # pytest suite
 docs/          # architecture notes
 ```
 
@@ -99,12 +101,47 @@ docs/          # architecture notes
 | Reporting Agent ↔ MCP client wiring → markdown report output |
 | Production guardrails: recursion limits, error boundaries, Postgres checkpointer, end-to-end test in LangGraph Studio |
 
+### Post-sprint — Hardening & productionization
+| Focus |
+|---|
+| Final documentation pass + step-by-step run instructions |
+| GitLab CI: automated `ruff` + `pytest` on every push (restored) |
+| Live end-to-end validation against real API credentials (Anthropic and OpenAI) |
+| Config-driven LLM provider (`LLM_PROVIDER=anthropic\|openai`) instead of a hardcoded model |
+| Prompt evaluation regression suite: golden dataset + real-LLM harness, distinct from the hermetic `pytest` suite |
+| `scripts/setup_env.py`: one-shot install + fail-fast environment validation |
+
+## Results
+
+Verified against this repo's current state, not aspirational:
+
+- **Test suite**: 103/103 `pytest` tests passing, `ruff check src tests scripts` clean — hermetic,
+  no API key or seeded vector store required.
+- **Live end-to-end run** (real OpenAI credentials, `gpt-5-mini`, objective *"Assess Acme vs Globex
+  pricing strategy and recommend a competitive positioning"*): completed in one pass via
+  `scripts/run_graph_cli.py` — 5 research findings gathered across 3 Research Agent visits, 7
+  analytics tool calls, one report written to disk through the real MCP filesystem server. The
+  supervisor routed Research → Analytics → Research → Research → Reporting → FINISH, staying well
+  under the recursion/visit cap. The generated report correctly derived numbers straight from the
+  source documents with no hallucination, e.g.:
+
+  > Globex deals are negotiated and bundled with mandatory implementation services. Industry
+  > estimates place typical annual contract value (ACV) between $150K and $400K.
+  > Mean ACV ≈ $275,000. ACV range = $250,000 (150K → 400K), a 166.7% increase from the low to
+  > high end.
+
+- **Prompt evaluation regression suite** (`python scripts/run_evals.py`, real OpenAI credentials):
+  7/7 cases passed. Notably `analytics/globex_acv_range` — the model called 7 real statistics
+  tools, and every reported figure (min $150K, max $400K, mean $275K, range $250K) traced back to
+  the source text rather than being invented, which is exactly the class of regression this suite
+  exists to catch.
+
 ## Getting started
 
 ### Prerequisites
 
 - Python 3.11+
-- An [Anthropic API key](https://console.anthropic.com/) (for the LLM calls — query rewriting, supervisor routing, analytics, and report drafting)
+- An API key for one LLM provider — [Anthropic](https://console.anthropic.com/) (default) or [OpenAI](https://platform.openai.com/api-keys) — for the LLM calls made by query rewriting, supervisor routing, analytics, and report drafting
 
 ### 1. Install
 
@@ -125,8 +162,17 @@ Postgres checkpointer, add the `prod` extra: `pip install -e ".[dev,prod]"`.
 cp .env.example .env
 ```
 
-Then edit `.env` and set `ANTHROPIC_API_KEY`. Everything else has a
-working default — see [Configuration](#configuration) below.
+Then edit `.env` and set `ANTHROPIC_API_KEY` (default provider) — or set
+`LLM_PROVIDER=openai` and `OPENAI_API_KEY` to use OpenAI instead. Everything
+else has a working default — see [Configuration](#configuration) below.
+
+Once `.env` is set, `python scripts/setup_env.py` re-runs the install from
+step 1 and then validates the result: it imports every critical package
+(LangGraph, the configured LLM provider, Chroma, MCP, etc.) and confirms
+`.env` has the API key `LLM_PROVIDER` actually needs, failing fast with an
+itemized list instead of a cryptic error later. Use `--skip-install` to
+validate an existing environment without reinstalling, or `--prod` to also
+cover the Postgres checkpointer extra.
 
 ### 3. Seed the vector store
 
@@ -149,7 +195,7 @@ pytest
 ruff check src tests scripts
 ```
 
-The test suite (68 tests) is hermetic — LLM calls, the vector store, and
+The test suite (103 tests) is hermetic — LLM calls, the vector store, and
 the MCP subprocess are all faked or run against real-but-local fixtures,
 so `pytest` doesn't require `ANTHROPIC_API_KEY` or the seeded vector store
 from step 3. A handful of tests do spawn the real local MCP server
@@ -181,6 +227,40 @@ and time-travel through checkpoints. `langgraph dev` manages its own
 persistence — it doesn't use `checkpointing/store.py`, which is for
 standalone use outside the dev server (see `run_graph()` in `graph.py`).
 
+## Prompt evaluation regression suite
+
+`pytest` proves the *code* is correct (routing logic, retrieval merging,
+tool execution, error boundaries) using fake LLMs — it never calls a real
+model. `scripts/run_evals.py` proves the *prompts* are still behaving,
+using real LLM calls against a small golden dataset grounded in the
+sample documents (e.g. Acme's real $49/seat price, Globex's real
+$150K–$400K ACV range) instead of synthetic expectations. It checks
+structural/grounded properties (query count, keyword coverage, whether a
+computed number actually derives from the source data) rather than exact
+text, since LLM output isn't deterministic.
+
+Run it after changing a system prompt, switching models, or before a
+release — not on every commit, since it costs real API calls:
+
+```bash
+python scripts/run_evals.py                  # current LLM_PROVIDER
+python scripts/run_evals.py --provider openai
+python scripts/run_evals.py --compare         # anthropic AND openai, side by side
+python scripts/run_evals.py --langsmith       # also run LangSmith dataset sync + LLM-judge experiments
+```
+
+Exits non-zero if any case fails, and writes a timestamped JSON report to
+`data/eval_results/`. The full-pipeline case needs the vector store seeded
+(step 3 above). See `src/market_research_team/evaluation/golden_dataset.py`
+to add cases.
+
+`--langsmith` requires `LANGSMITH_API_KEY` (see [Configuration](#configuration)). It layers
+LLM-judge scoring on top of — not instead of — the deterministic checks above: each of the 5
+categories gets its cases mirrored into a LangSmith Dataset
+(`market-research-team-<category>`) and scored in a LangSmith Experiment by both the existing
+deterministic check and a category-tailored LLM judge (relevance / groundedness / appropriateness
+depending on category). See `src/market_research_team/evaluation/langsmith_eval.py`.
+
 ## Configuration
 
 All settings live in `src/market_research_team/config.py` (pydantic-settings)
@@ -189,13 +269,32 @@ and can be overridden via `.env` or real environment variables. From
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | *(required)* | Claude access for every LLM-driven node |
+| `LLM_PROVIDER` | `anthropic` | `anthropic` or `openai` — selects which chat model `llm.get_chat_model()` builds |
+| `ANTHROPIC_API_KEY` | *(required if `LLM_PROVIDER=anthropic`)* | Claude access for every LLM-driven node |
+| `OPENAI_API_KEY` | *(required if `LLM_PROVIDER=openai`)* | OpenAI access for every LLM-driven node |
 | `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` / `LANGCHAIN_PROJECT` | off | Optional LangSmith tracing |
+| `LANGSMITH_API_KEY` | unset | Required for `scripts/run_evals.py --langsmith` (dataset sync + LLM-judge experiments) |
 | `VECTORSTORE_DIR` | `./data/vectorstore` | Chroma persistence directory |
 | `REPORTS_DIR` | `./reports` | Where the MCP server writes markdown reports |
 | `DATABASE_URL` | unset | If set, `get_checkpointer()` uses Postgres instead of the local SQLite file |
 
-Other tunables (embedding/reranker model names, chunk sizes, recursion
-limit, checkpoint DB path) have sensible defaults in `config.py` and are
-generally not something you need to touch to run the demo.
+Other tunables (`anthropic_model` / `openai_model` names, embedding/reranker
+model names, chunk sizes, recursion limit, checkpoint DB path) have
+sensible defaults in `config.py` and are generally not something you need
+to touch to run the demo. Every node builds its LLM through
+`llm.get_chat_model()` rather than importing a provider class directly, so
+`LLM_PROVIDER` is the only thing that needs to change to switch providers.
+
+## Known limitations
+
+Honest gaps, not hidden:
+
+- **The Postgres checkpointer is unverified against a real database.** `get_checkpointer()`
+  supports `DATABASE_URL`, but it's only been exercised via code review, not a live Postgres
+  instance.
+- **No PR/branch review workflow.** All work has been committed directly to `main`. `main` is
+  branch-protected against force-push, but nothing currently requires review before a merge.
+- **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
+  programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
+  been clicked through interactively.
 

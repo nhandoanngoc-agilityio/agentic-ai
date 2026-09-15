@@ -1,9 +1,13 @@
+from typing import Any
+
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.research import node as research_node_module
-from market_research_team.graph import graph
+from market_research_team.graph import build_production_graph
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding, RouteDecision
 from market_research_team.supervisor import router as supervisor_router_module
 
@@ -31,11 +35,19 @@ def _fake_analytics_pipeline(
     ]
 
 
-async def _fake_reporting_pipeline(
-    objective: str, findings: list[ResearchFinding], results: list[AnalyticsResult]
+def _fake_draft_report(
+    objective: str,
+    findings: list[ResearchFinding],
+    results: list[AnalyticsResult],
+    llm: Any,
+    feedback: str | None = None,
 ) -> str:
-    """Async on purpose: `reporting_node` wraps the real (async) pipeline in
-    `asyncio.run(...)`, so the stub must also be awaitable."""
+    return "# Mock Report"
+
+
+async def _fake_write_report_via_mcp(filename: str, content: str) -> str:
+    """Async on purpose: `reporting_node` wraps this in `asyncio.run(...)`,
+    so the stub must also be awaitable."""
 
     return "reports/mock-report.md"
 
@@ -61,8 +73,10 @@ def _stub_agent_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(research_node_module, "run_research_pipeline", _fake_research_pipeline)
     monkeypatch.setattr(analytics_node_module, "run_analytics_pipeline", _fake_analytics_pipeline)
+    monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
+    monkeypatch.setattr(reporting_node_module, "draft_report", _fake_draft_report)
     monkeypatch.setattr(
-        reporting_node_module, "run_reporting_pipeline", _fake_reporting_pipeline
+        reporting_node_module, "write_report_via_mcp", _fake_write_report_via_mcp
     )
     monkeypatch.setattr(
         supervisor_router_module, "run_supervisor_decision", _fake_supervisor_decision
@@ -80,8 +94,21 @@ def _initial_state() -> AgentState:
     }
 
 
+def _run_to_finish(initial_state: AgentState, thread_id: str) -> AgentState:
+    """Run the compiled graph to completion, auto-approving the Reporting
+    Agent's human-review interrupt the first time it's hit."""
+
+    compiled_graph = build_production_graph(InMemorySaver())
+    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+
+    result = compiled_graph.invoke(initial_state, config=config)
+    while "__interrupt__" in result:
+        result = compiled_graph.invoke(Command(resume={"approved": True}), config=config)
+    return result
+
+
 def test_supervisor_routes_through_all_agents_and_finishes() -> None:
-    result = graph.invoke(_initial_state())
+    result = _run_to_finish(_initial_state(), thread_id="routes-through-all-agents")
 
     assert result["next"] == "FINISH"
     assert len(result["research_findings"]) == 1
@@ -90,7 +117,7 @@ def test_supervisor_routes_through_all_agents_and_finishes() -> None:
 
 
 def test_supervisor_visits_agents_in_order() -> None:
-    result = graph.invoke(_initial_state())
+    result = _run_to_finish(_initial_state(), thread_id="visits-agents-in-order")
 
     agent_names = [m.name for m in result["messages"] if getattr(m, "name", None)]
 
@@ -120,7 +147,7 @@ def test_supervisor_can_hand_off_back_to_research_before_finishing(
 
     monkeypatch.setattr(supervisor_router_module, "run_supervisor_decision", _bouncing_decision)
 
-    result = graph.invoke(_initial_state())
+    result = _run_to_finish(_initial_state(), thread_id="hands-off-back-to-research")
 
     agent_names = [m.name for m in result["messages"] if getattr(m, "name", None)]
     assert agent_names.count("research_agent") == 2
