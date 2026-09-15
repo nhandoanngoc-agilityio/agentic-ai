@@ -12,6 +12,7 @@ import uuid
 from typing import Any
 
 import pytest
+from langgraph.types import Command
 
 pytest.importorskip("psycopg", reason="psycopg not installed (pip install -e '.[prod]')")
 
@@ -55,9 +56,17 @@ def _fake_analytics_pipeline(
     return [{"metric": "count", "value": float(len(findings)), "detail": "d"}]
 
 
-async def _fake_reporting_pipeline(
-    objective: str, findings: list[ResearchFinding], results: list[AnalyticsResult]
+def _fake_draft_report(
+    objective: str,
+    findings: list[ResearchFinding],
+    results: list[AnalyticsResult],
+    llm: Any,
+    feedback: str | None = None,
 ) -> str:
+    return "# Mock Report"
+
+
+async def _fake_write_report_via_mcp(filename: str, content: str) -> str:
     return "reports/mock-report.md"
 
 
@@ -75,8 +84,10 @@ def _fake_supervisor_decision(state: AgentState) -> RouteDecision:
 def _stub_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(research_node_module, "run_research_pipeline", _fake_research_pipeline)
     monkeypatch.setattr(analytics_node_module, "run_analytics_pipeline", _fake_analytics_pipeline)
+    monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
+    monkeypatch.setattr(reporting_node_module, "draft_report", _fake_draft_report)
     monkeypatch.setattr(
-        reporting_node_module, "run_reporting_pipeline", _fake_reporting_pipeline
+        reporting_node_module, "write_report_via_mcp", _fake_write_report_via_mcp
     )
     monkeypatch.setattr(
         supervisor_router_module, "run_supervisor_decision", _fake_supervisor_decision
@@ -113,6 +124,10 @@ def test_postgres_checkpointer_persists_state_across_the_run() -> None:
     compiled_graph = build_production_graph(checkpointer)
 
     result = run_graph(_initial_state(), compiled_graph=compiled_graph, thread_id=thread_id)
+    while "__interrupt__" in result:
+        result = run_graph(
+            Command(resume={"approved": True}), compiled_graph=compiled_graph, thread_id=thread_id
+        )
 
     assert result["next"] == "FINISH"
     assert result["report_path"] == "reports/mock-report.md"
@@ -131,8 +146,14 @@ def test_two_threads_do_not_share_checkpointed_state() -> None:
     checkpointer = get_checkpointer()
     compiled_graph = build_production_graph(checkpointer)
 
-    run_graph(_initial_state(), compiled_graph=compiled_graph, thread_id=thread_a)
-    run_graph(_initial_state(), compiled_graph=compiled_graph, thread_id=thread_b)
+    for thread_id in (thread_a, thread_b):
+        result = run_graph(_initial_state(), compiled_graph=compiled_graph, thread_id=thread_id)
+        while "__interrupt__" in result:
+            result = run_graph(
+                Command(resume={"approved": True}),
+                compiled_graph=compiled_graph,
+                thread_id=thread_id,
+            )
 
     state_a = compiled_graph.get_state({"configurable": {"thread_id": thread_a}})
     state_b = compiled_graph.get_state({"configurable": {"thread_id": thread_b}})
