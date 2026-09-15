@@ -28,3 +28,6 @@ reports/*
 
 # OS
 .DS_Store
+
+.claude/*
+.teamai/*
