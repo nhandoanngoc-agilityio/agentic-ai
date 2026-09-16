@@ -1,0 +1,12 @@
+team: agentic-ai
+mode: self
+description: TeamAI single-repo (knowledge on main, reports on teamai-reports)
+repo: git@gitlab.asoft-python.com:nhan.doanngoc/agentic-ai.git
+provider: git
+sharing:
+  rules:
+    enforced: []
+  docs:
+    localDir: ./.teamai/docs
+  env:
+    injectShellProfile: true

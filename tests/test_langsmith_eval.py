@@ -500,3 +500,19 @@ def test_run_langsmith_eval_restores_provider_even_on_failure(monkeypatch) -> No
         langsmith_eval.run_langsmith_eval("openai")
 
     assert settings.llm_provider == "anthropic"
+
+
+def test_judge_report_returns_structured_score() -> None:
+    fake_llm = _FakeStructuredJudgeLLM(score=0.6, passed=True, reasoning="mostly grounded")
+
+    judgment = langsmith_eval.judge_report(
+        "Assess Acme vs Globex pricing",
+        [{"source": "x", "content": "Acme is $49/seat"}],
+        [{"metric": "mean", "value": 49.0, "detail": "d"}],
+        "# Report\nAcme is $49/seat.",
+        fake_llm,  # type: ignore[arg-type]
+    )
+
+    assert judgment.score == 0.6
+    assert judgment.passed is True
+    assert judgment.reasoning == "mostly grounded"

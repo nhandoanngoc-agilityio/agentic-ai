@@ -306,17 +306,37 @@ _REPORTING_JUDGE_PROMPT = (
 )
 
 
-def llm_judge_reporting(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
-    report = (run.outputs or {}).get("report", "")
-    findings = (example.inputs or {}).get("findings", [])
-    results = (example.inputs or {}).get("results", [])
+def judge_report(
+    objective: str,
+    findings: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    report: str,
+    llm: BaseChatModel,
+) -> _JudgeScoreSchema:
+    """Groundedness + structure judge over a drafted report. Standalone (rather than inlined
+    into llm_judge_reporting) so any caller that needs to judge a report shares this one
+    prompt/logic path instead of duplicating it."""
+
     structured_llm = llm.with_structured_output(_JudgeScoreSchema)
-    judgment = structured_llm.invoke(
+    return structured_llm.invoke(
         [
             SystemMessage(content=_REPORTING_JUDGE_PROMPT),
-            HumanMessage(content=f"Findings: {findings}\nResults: {results}\nReport:\n{report}"),
+            HumanMessage(
+                content=(
+                    f"Objective: {objective}\nFindings: {findings}\nResults: {results}\n"
+                    f"Report:\n{report}"
+                )
+            ),
         ]
     )
+
+
+def llm_judge_reporting(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
+    report = (run.outputs or {}).get("report", "")
+    objective = (example.inputs or {}).get("objective", "")
+    findings = (example.inputs or {}).get("findings", [])
+    results = (example.inputs or {}).get("results", [])
+    judgment = judge_report(objective, findings, results, report, llm)
     return {"key": "llm_judge", "score": judgment.score, "comment": judgment.reasoning}
 
 
