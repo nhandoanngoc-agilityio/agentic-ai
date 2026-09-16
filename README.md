@@ -261,6 +261,68 @@ categories gets its cases mirrored into a LangSmith Dataset
 deterministic check and a category-tailored LLM judge (relevance / groundedness / appropriateness
 depending on category). See `src/market_research_team/evaluation/langsmith_eval.py`.
 
+## Streaming comparison UI
+
+A browser UI (`ui/`, Next.js + CopilotKit) that runs one objective through a single provider —
+pick Anthropic or OpenAI from a dropdown (defaults to OpenAI) — and streams the run live. Once the
+draft is ready, it shows the report alongside the research findings and analytics results it was
+built from, plus run stats (research findings, analytics results, supervisor visits, elapsed
+time), so every number in the
+draft is traceable to a real row. Approve or reject-with-feedback exactly as the CLI already does
+(`scripts/run_graph_cli.py`) — a rejection triggers a redraft.
+
+Both `langgraph dev` deployments below stay running throughout, even though only one is called
+per run — that's what lets the dropdown switch providers without restarting anything. Requires
+**both** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` set for that reason, unlike every other flow in
+this repo, which needs only one provider's key.
+
+### First: remove `LLM_PROVIDER` from `.env`
+
+**This step is not optional — skip it and both ports silently run the same provider.**
+
+`langgraph.json` declares `"env": ".env"`, and the dev server applies every variable it finds
+there with an unconditional `os.environ[key] = value` (see `patch_environment` in
+`langgraph_api/cli.py`). So a `LLM_PROVIDER=` line in `.env` *overwrites* the one you export on
+the command line — identically for both processes. The UI's dropdown labels ("Anthropic" /
+"OpenAI") are client-side strings naming which *port* it's calling, not which provider is actually
+running on it, so a misconfigured run looks completely normal while both ports are on the same
+provider.
+
+Comment out or delete the `LLM_PROVIDER=` line in your `.env` before starting the two dev
+servers. With no value in `.env`, nothing overwrites the shell-exported one, and each process
+picks up the provider you gave it. (Every other flow in this repo is single-provider and reads
+`LLM_PROVIDER` from `.env` as usual, so put the line back when you're done.)
+
+```bash
+grep -n '^LLM_PROVIDER=' .env   # must print nothing before you continue
+```
+
+### Then: three processes, each in its own terminal
+
+```bash
+# Terminal 1 — Anthropic-backed graph deployment
+LLM_PROVIDER=anthropic langgraph dev --port 2024 --no-browser
+
+# Terminal 2 — OpenAI-backed graph deployment
+LLM_PROVIDER=openai langgraph dev --port 2025 --no-browser
+
+# Terminal 3 — the UI itself
+cd ui
+cp .env.local.example .env.local   # edit if you changed either port above
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`, pick a provider (or leave it on the OpenAI default), enter an
+objective, and click "Run". See `ui/README.md` for frontend-specific details.
+
+To sanity-check which provider a port is *actually* running, temporarily unset one key in `.env`
+(not just the shell): with `OPENAI_API_KEY` empty there, only a run against the OpenAI-backed port
+fails (the failure surfaces via `state.error`, since `get_chat_model()` builds `ChatOpenAI` only
+when `LLM_PROVIDER=openai`). With LangSmith tracing on (`LANGCHAIN_TRACING_V2=true`), each run's
+trace also names the concrete model — `claude-sonnet-5` vs `gpt-4o-mini` — as a non-destructive
+alternative check.
+
 ## Configuration
 
 All settings live in `src/market_research_team/config.py` (pydantic-settings)
@@ -297,4 +359,8 @@ Honest gaps, not hidden:
 - **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
   programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
   been clicked through interactively.
+- **The streaming comparison UI has no automated browser test coverage.** Its components are
+  covered by Vitest/React Testing Library, but the full two-provider run-and-compare flow against
+  real `langgraph dev` deployments is a manual check, the same way LangGraph Studio's browser UI
+  is.
 

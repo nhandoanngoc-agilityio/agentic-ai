@@ -133,3 +133,35 @@ def test_reporting_node_ends_run_after_max_review_rounds(
     assert result.get("report_path") is None
     assert result.get("error") is not None
     assert f"{max_rounds} review rounds" in result["error"]
+
+
+def test_reporting_node_discards_immediately_without_further_redraft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    draft_calls: list[str | None] = []
+    monkeypatch.setattr(
+        reporting_node_module, "draft_report", _fake_draft_report_recording(draft_calls)
+    )
+
+    graph = _compiled_graph()
+    config: dict[str, Any] = {"configurable": {"thread_id": "t4"}}
+
+    paused = graph.invoke(_initial_state(), config=config)
+    assert "__interrupt__" in paused
+    assert paused["__interrupt__"][0].value["attempt"] == 1
+
+    result = graph.invoke(Command(resume={"approved": False, "discard": True}), config=config)
+
+    assert "__interrupt__" not in result
+    assert result.get("report_path") is None
+    assert result.get("error") is None
+    # The discard branch's contract with the supervisor: a discard sets neither
+    # `report_path` nor `error`, so `report_discarded` is the only signal
+    # `decide_next_step` has to end the run instead of routing back to reporting.
+    # (tests/test_graph_discard_terminates.py proves that end-to-end on the real graph.)
+    assert result.get("report_discarded") is True
+    # LangGraph replays the node from the top on every resume (see the analogous comment in
+    # test_reporting_node_redrafts_with_feedback_after_rejection above), so draft_report may be
+    # called more than once here -- what matters is none of those calls ever carried feedback,
+    # i.e. no redraft-with-feedback round was ever triggered by the discard.
+    assert draft_calls and all(feedback is None for feedback in draft_calls)
