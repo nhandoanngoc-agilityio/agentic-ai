@@ -34,3 +34,9 @@ class AgentState(TypedDict):
     analytics_results: list[AnalyticsResult]
     report_path: str | None
     error: NotRequired[str | None]
+    # Set by `reporting_node` when a human explicitly discards a draft rather
+    # than approving or rejecting it (the comparison UI's "losing" candidate).
+    # A discard writes no report and records no error, so without this flag the
+    # supervisor would see an unfinished run and route back to reporting
+    # forever -- `decide_next_step` checks it to end the run instead.
+    report_discarded: NotRequired[bool]

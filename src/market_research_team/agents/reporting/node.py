@@ -172,6 +172,20 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
                     AIMessage(content=f"Report written to {report_path}.", name="reporting_agent")
                 ],
             }
+        if decision.get("discard"):
+            # `report_discarded` is what actually ends the run: a discard sets
+            # neither `report_path` nor `error`, so the supervisor's
+            # `decide_next_step` would otherwise route straight back here.
+            return {
+                "report_path": None,
+                "report_discarded": True,
+                "messages": [
+                    AIMessage(
+                        content="Report discarded (comparison not selected).",
+                        name="reporting_agent",
+                    )
+                ],
+            }
         feedback = decision.get("feedback")
 
     return {
