@@ -64,9 +64,7 @@ def chunk_document(
     chunks: list[HierarchicalChunk] = []
     section_index = 0
     for section in sections:
-        section_texts = section_splitter.split_text(section.page_content) or [
-            section.page_content
-        ]
+        section_texts = section_splitter.split_text(section.page_content) or [section.page_content]
         for section_text in section_texts:
             section_id = f"{doc_id}::s{section_index}"
             section_index += 1

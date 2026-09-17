@@ -4,11 +4,11 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from market_research_team.agents.research.query_rewriter import rewrite_and_expand
-from market_research_team.agents.research.reranker import load_cross_encoder, rerank
-from market_research_team.agents.research.retriever import load_vectorstore, retrieve_for_queries
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
+from market_research_team.retrieval.query_rewriter import rewrite_and_expand
+from market_research_team.retrieval.reranker import load_cross_encoder, rerank
+from market_research_team.retrieval.retriever import load_vectorstore, retrieve_for_queries
 from market_research_team.state import AgentState, ResearchFinding
 
 _RETRIEVAL_K_PER_QUERY = 4

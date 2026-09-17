@@ -1,5 +1,4 @@
-"""Top-level graph assembly.
-"""
+"""Top-level graph assembly."""
 
 from typing import Any, cast
 
@@ -12,10 +11,10 @@ from langgraph.types import Command
 from market_research_team.agents.analytics.node import analytics_node
 from market_research_team.agents.reporting.node import reporting_node
 from market_research_team.agents.research.node import research_node
+from market_research_team.agents.supervisor.router import route_from_supervisor, supervisor_node
 from market_research_team.config import settings
 from market_research_team.guardrails import with_error_boundary
 from market_research_team.state import AgentState
-from market_research_team.supervisor.router import route_from_supervisor, supervisor_node
 
 
 def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):

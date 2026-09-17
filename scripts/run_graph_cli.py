@@ -17,8 +17,8 @@ from langgraph.types import Command
 
 from market_research_team.checkpointing.store import get_checkpointer
 from market_research_team.graph import build_production_graph, run_graph
+from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
-from market_research_team.validation import validate_objective
 
 
 def _initial_state(objective: str) -> AgentState:

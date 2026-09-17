@@ -54,6 +54,16 @@
           }
         ],
         "description": "[teamai] Hook dispatch post-tool-use TodoWrite"
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ruff-on-edit.sh"
+          }
+        ],
+        "description": "Auto-format edited Python files with ruff"
       }
     ],
     "UserPromptSubmit": [
@@ -66,6 +76,28 @@
           }
         ],
         "description": "[teamai] Hook dispatch prompt-submit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-bash.sh"
+          }
+        ],
+        "description": "Block destructive shell commands"
+      },
+      {
+        "matcher": "Read|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-secrets.sh"
+          }
+        ],
+        "description": "Block access to .env and checkpoint DB"
       }
     ]
   }

@@ -26,7 +26,7 @@ from market_research_team import graph as graph_module
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.reporting.node import draft_report
-from market_research_team.agents.research.query_rewriter import rewrite_and_expand
+from market_research_team.agents.supervisor.router import decide_next_step
 from market_research_team.config import settings
 from market_research_team.evaluation import checks
 from market_research_team.evaluation.golden_dataset import (
@@ -37,8 +37,8 @@ from market_research_team.evaluation.golden_dataset import (
     SUPERVISOR_DECISION_CASES,
 )
 from market_research_team.llm import get_chat_model
+from market_research_team.retrieval.query_rewriter import rewrite_and_expand
 from market_research_team.state import AgentState
-from market_research_team.supervisor.router import decide_next_step
 
 
 @dataclass
@@ -104,9 +104,7 @@ def evaluate_reporting(llm: BaseChatModel, provider: str) -> list[EvalResult]:
     results = []
     for case in REPORTING_CASES:
         report = draft_report(case.objective, case.findings, case.results, llm)
-        sections_passed, sections_detail = checks.check_contains_all(
-            report, case.required_sections
-        )
+        sections_passed, sections_detail = checks.check_contains_all(report, case.required_sections)
         facts_passed, facts_detail = checks.check_contains_all(report, case.required_facts)
         passed = sections_passed and facts_passed
         detail = f"{sections_detail}; {facts_detail}"
@@ -119,7 +117,7 @@ def evaluate_full_pipeline(provider: str) -> list[EvalResult]:
 
     Uses `graph_module.run_graph` (not a direct import) so tests can
     monkeypatch it, same pattern as the graph-level tests in
-    `tests/test_supervisor_routing.py`.
+    `tests/agents/test_supervisor_routing.py`.
     """
 
     results = []
