@@ -18,3 +18,16 @@ this alongside each day's work rather than after the fact.
 
 - Confirm target LLM/provider if `langchain-anthropic` default is wrong.
 - Confirm vector store choice (Chroma vs. Qdrant/pgvector) before Day 3-4 ingestion work.
+
+## 2026-09-17 — Folder restructure
+
+Aligned with a "production-ai-app" reference layout. Pure moves, no behaviour change:
+
+- `agents/research/{retriever,reranker,query_rewriter}.py` → `retrieval/` (the research
+  node now only orchestrates; retrieval components are reusable outside it).
+- `validation.py` → `security/input_validation.py` (future prompt-injection defenses land here).
+- `supervisor/` → `agents/supervisor/` (the router is an agent-layer concern).
+- `ui/` → `frontend/`.
+- `tests/` grouped by area: `agents/`, `retrieval/`, `ingestion/`, `evaluation/`, `graph/`,
+  `checkpointing/`, `mcp/`, `security/`, `scripts/`.
+- Added `AGENTS.md` (pointer to `CLAUDE.md`) and `.claude/` agents, skills, and hooks.

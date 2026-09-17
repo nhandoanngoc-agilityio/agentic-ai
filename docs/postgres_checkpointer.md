@@ -45,10 +45,10 @@ pip install -e ".[dev,prod]"   # adds langgraph-checkpoint-postgres + psycopg
 
 ```bash
 export DATABASE_URL="postgresql://$(whoami)@localhost:5432/market_research_verify"
-pytest tests/test_checkpointing_postgres.py -v
+pytest tests/checkpointing/test_checkpointing_postgres.py -v
 ```
 
-This test mirrors `tests/test_checkpointing.py` (the SQLite equivalent):
+This test mirrors `tests/checkpointing/test_checkpointing.py` (the SQLite equivalent):
 it builds a real compiled graph with `get_checkpointer()`, runs it through
 `run_graph()`, and asserts the checkpoint history and final state actually
 persisted in Postgres — not a mock. It's skipped automatically (via a

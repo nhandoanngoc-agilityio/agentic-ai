@@ -231,10 +231,17 @@ Expected: every line prints `FAIL` (scripts don't exist yet) and exit 1.
 #!/usr/bin/env bash
 # PreToolUse hook for Bash: block destructive commands. Exit 2 = block.
 set -u
+<<<<<<< HEAD
 python3 - <<'EOF'
 import json, re, sys
 try:
     cmd = json.load(sys.stdin).get("tool_input", {}).get("command", "")
+=======
+HOOK_INPUT="$(cat)" python3 - <<'PY'
+import json, os, re, sys
+try:
+    cmd = json.loads(os.environ.get("HOOK_INPUT", "")).get("tool_input", {}).get("command", "")
+>>>>>>> d641672681169dc82e06f188a2b5977f3e528663
 except Exception:
     sys.exit(0)
 
@@ -252,7 +259,11 @@ for pattern, reason in rules:
         print(f"Blocked by .claude/hooks/guard-bash.sh: {reason}. Command: {cmd}", file=sys.stderr)
         sys.exit(2)
 sys.exit(0)
+<<<<<<< HEAD
 EOF
+=======
+PY
+>>>>>>> d641672681169dc82e06f188a2b5977f3e528663
 ```
 
 - [ ] **Step 4: Write `protect-secrets.sh`**
@@ -261,10 +272,17 @@ EOF
 #!/usr/bin/env bash
 # PreToolUse hook for Read/Edit/Write/MultiEdit: block secret files. Exit 2 = block.
 set -u
+<<<<<<< HEAD
 python3 - <<'EOF'
 import json, os, sys
 try:
     path = json.load(sys.stdin).get("tool_input", {}).get("file_path", "")
+=======
+HOOK_INPUT="$(cat)" python3 - <<'PY'
+import json, os, sys
+try:
+    path = json.loads(os.environ.get("HOOK_INPUT", "")).get("tool_input", {}).get("file_path", "")
+>>>>>>> d641672681169dc82e06f188a2b5977f3e528663
 except Exception:
     sys.exit(0)
 base = os.path.basename(path)
@@ -274,7 +292,11 @@ if base == ".env" or norm.endswith("data/checkpoints.sqlite"):
           "Use .env.example for keys.", file=sys.stderr)
     sys.exit(2)
 sys.exit(0)
+<<<<<<< HEAD
 EOF
+=======
+PY
+>>>>>>> d641672681169dc82e06f188a2b5977f3e528663
 ```
 
 - [ ] **Step 5: Write `ruff-on-edit.sh`**

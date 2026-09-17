@@ -17,7 +17,7 @@ from market_research_team import graph as graph_module
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.reporting.node import draft_report
-from market_research_team.agents.research.query_rewriter import rewrite_and_expand
+from market_research_team.agents.supervisor.router import decide_next_step
 from market_research_team.config import settings
 from market_research_team.evaluation import checks
 from market_research_team.evaluation.golden_dataset import (
@@ -28,8 +28,8 @@ from market_research_team.evaluation.golden_dataset import (
     SUPERVISOR_DECISION_CASES,
 )
 from market_research_team.llm import get_chat_model
+from market_research_team.retrieval.query_rewriter import rewrite_and_expand
 from market_research_team.state import AgentState
-from market_research_team.supervisor.router import decide_next_step
 
 
 @dataclass

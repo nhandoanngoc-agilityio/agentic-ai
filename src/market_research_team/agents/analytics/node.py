@@ -59,8 +59,7 @@ def run_tool_calling_loop(
         SystemMessage(content=_SYSTEM_PROMPT),
         HumanMessage(
             content=(
-                f"Research objective: {objective}\n\n"
-                f"Findings:\n{_findings_to_context(findings)}"
+                f"Research objective: {objective}\n\nFindings:\n{_findings_to_context(findings)}"
             )
         ),
     ]
