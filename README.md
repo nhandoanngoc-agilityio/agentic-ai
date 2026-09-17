@@ -63,22 +63,25 @@ src/market_research_team/
 ├── config.py                 # pydantic-settings: model, paths, thresholds
 ├── llm.py                    # chat model factory (LLM_PROVIDER: anthropic | openai)
 ├── guardrails.py             # per-node error-boundary wrapper
-├── supervisor/
-│   └── router.py             # LLM-driven routing + Research/Analytics handoff
+├── retrieval/                # query rewriting, vector retrieval, cross-encoder reranking
+├── security/                 # input validation at agent boundaries
 ├── agents/
-│   ├── research/              # query rewriting, retrieval, cross-encoder reranking
-│   ├── analytics/              # native Python math/stat tool-calling agent
-│   └── reporting/              # drafts report + MCP client wiring
-├── ingestion/                 # loaders, hierarchical/recursive chunking, index build
-├── mcp_server/                 # local MCP server exposing filesystem write ops
-├── checkpointing/               # SQLite / Postgres checkpointer factory
-└── evaluation/                   # golden dataset + offline prompt-eval harness
+│   ├── supervisor/           # LLM-driven routing + Research/Analytics handoff
+│   ├── research/             # research node (uses retrieval/)
+│   ├── analytics/            # native Python math/stat tool-calling agent
+│   └── reporting/            # drafts report + MCP client wiring
+├── ingestion/                # loaders, hierarchical/recursive chunking, index build
+├── mcp_server/               # local MCP server exposing filesystem write ops
+├── checkpointing/            # SQLite / Postgres checkpointer factory
+└── evaluation/               # golden dataset + offline/LangSmith prompt-eval harness
 
+frontend/      # Next.js + CopilotKit comparison UI (own package.json, tests via `npm test`)
 data/          # raw → processed documents, persisted vector store, checkpoint DB, eval results
 reports/       # markdown reports written by the MCP server
 scripts/       # setup_env.py, seed_vectorstore.py, run_graph_cli.py, run_evals.py
-tests/         # pytest suite
-docs/          # architecture notes
+tests/         # pytest suite, grouped by area (agents/, retrieval/, evaluation/, graph/, ...)
+docs/          # architecture notes, design specs and plans under docs/superpowers/
+CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); config in .claude/
 ```
 
 ## What was built
@@ -263,7 +266,7 @@ depending on category). See `src/market_research_team/evaluation/langsmith_eval.
 
 ## Streaming comparison UI
 
-A browser UI (`ui/`, Next.js + CopilotKit) that runs one objective through a single provider —
+A browser UI (`frontend/`, Next.js + CopilotKit) that runs one objective through a single provider —
 pick Anthropic or OpenAI from a dropdown (defaults to OpenAI) — and streams the run live. Once the
 draft is ready, it shows the report alongside the research findings and analytics results it was
 built from, plus run stats (research findings, analytics results, supervisor visits, elapsed
@@ -314,7 +317,7 @@ npm run dev
 ```
 
 Open `http://localhost:3000`, pick a provider (or leave it on the OpenAI default), enter an
-objective, and click "Run". See `ui/README.md` for frontend-specific details.
+objective, and click "Run". See `frontend/README.md` for frontend-specific details.
 
 To sanity-check which provider a port is *actually* running, temporarily unset one key in `.env`
 (not just the shell): with `OPENAI_API_KEY` empty there, only a run against the OpenAI-backed port

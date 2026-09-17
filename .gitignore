@@ -31,6 +31,7 @@ reports/*
 # OS
 .DS_Store
 
-.claude/*
+.claude/settings.local.json
+.claude/worktrees/
 .teamai/*
 docs/superpowers/*

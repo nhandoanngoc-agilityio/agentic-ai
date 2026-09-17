@@ -56,9 +56,7 @@ def with_error_boundary(
             logger.exception("Node %r failed", node_name)
             update: dict[str, Any] = {
                 "error": f"{node_name} failed: {exc}",
-                "messages": [
-                    AIMessage(content=f"{node_name} failed: {exc}", name=node_name)
-                ],
+                "messages": [AIMessage(content=f"{node_name} failed: {exc}", name=node_name)],
             }
             if fallback_updates:
                 update.update(fallback_updates)

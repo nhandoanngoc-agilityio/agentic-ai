@@ -218,9 +218,7 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
         "error": f"Reporting write rejected after {_MAX_REVIEW_ROUNDS} review rounds.",
         "messages": [
             AIMessage(
-                content=(
-                    f"Report rejected after {_MAX_REVIEW_ROUNDS} review rounds; ending run."
-                ),
+                content=(f"Report rejected after {_MAX_REVIEW_ROUNDS} review rounds; ending run."),
                 name="reporting_agent",
             )
         ],

@@ -20,8 +20,7 @@ def main() -> None:
     section_count = sum(1 for chunk in chunks if chunk.level == "section")
     leaf_count = sum(1 for chunk in chunks if chunk.level == "leaf")
     print(
-        f"Loaded {len(documents)} documents -> "
-        f"{section_count} sections, {leaf_count} leaf chunks"
+        f"Loaded {len(documents)} documents -> {section_count} sections, {leaf_count} leaf chunks"
     )
 
     parent_store_path = settings.processed_dir / "parent_sections.json"
