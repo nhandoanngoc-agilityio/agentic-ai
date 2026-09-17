@@ -47,3 +47,23 @@ def test_rewrite_and_expand_falls_back_when_llm_returns_no_usable_queries() -> N
     queries = rewrite_and_expand("Assess competitor pricing strategy", llm)  # type: ignore[arg-type]
 
     assert queries == ["Assess competitor pricing strategy"]
+
+
+def test_rewrite_and_expand_wraps_objective_in_delimiter_tags() -> None:
+    captured: dict[str, list[object]] = {}
+
+    class _CapturingStructuredLLM:
+        def invoke(self, messages: list[object]) -> _FakeQueryExpansion:
+            captured["messages"] = messages
+            return _FakeQueryExpansion(["acme pricing"])
+
+    class _CapturingLLM:
+        def with_structured_output(self, _schema: object) -> _CapturingStructuredLLM:
+            return _CapturingStructuredLLM()
+
+    rewrite_and_expand("Assess Acme pricing", _CapturingLLM())  # type: ignore[arg-type]
+
+    human_message = captured["messages"][1]
+    assert human_message.content == (
+        "<research_objective>\nAssess Acme pricing\n</research_objective>"
+    )

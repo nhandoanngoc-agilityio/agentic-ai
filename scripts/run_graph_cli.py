@@ -18,6 +18,7 @@ from langgraph.types import Command
 from market_research_team.checkpointing.store import get_checkpointer
 from market_research_team.graph import build_production_graph, run_graph
 from market_research_team.state import AgentState
+from market_research_team.validation import validate_objective
 
 
 def _initial_state(objective: str) -> AgentState:
@@ -63,11 +64,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    try:
+        objective = validate_objective(args.objective)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     thread_id = args.thread_id or str(uuid.uuid4())
     compiled_graph = build_production_graph(get_checkpointer())
 
     result = run_graph(
-        _initial_state(args.objective),
+        _initial_state(objective),
         compiled_graph=compiled_graph,
         thread_id=thread_id,
         recursion_limit=args.recursion_limit,
