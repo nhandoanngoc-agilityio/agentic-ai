@@ -245,7 +245,7 @@ rules = [
     (r"\bgit\s+push\b[^\n]*(\s--force(-with-lease)?\b|\s-f\b)", "git push --force"),
     (r"\bgit\s+clean\s+-[a-zA-Z]*f", "git clean -f"),
     (r"(>|>>|\btee\b)\s*\.env(\s|$)", "writing to .env"),
-    (r"\b(rm|mv|cp)\s+[^\n]*(^|\s)\.env(\s|$)", "removing or moving .env"),
+    (r"\b(rm|mv|cp)\s+([^\n]*\s)?\.env(\s|$)", "removing or moving .env"),
 ]
 for pattern, reason in rules:
     if re.search(pattern, cmd):
