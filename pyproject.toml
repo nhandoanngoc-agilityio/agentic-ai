@@ -30,6 +30,7 @@ dependencies = [
     # --- MCP integration ---
     "mcp>=1.28,<2.0",                     # official MCP Python SDK -- stay on v1.x, v2 is alpha
     "langchain-mcp-adapters>=0.2.1",      # wraps MCP tools as LangChain/LangGraph tools
+    "langfuse>=3.0",                      # optional tracing; no-ops when unconfigured
 
     # --- Ingestion utilities ---
     "pypdf>=5.1",

@@ -108,7 +108,7 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 | Focus |
 |---|
 | Final documentation pass + step-by-step run instructions |
-| GitLab CI: automated `ruff` + `pytest` on every push (restored) |
+| GitLab CI: automated `ruff` + `pytest` on every push (currently disabled — see [Known limitations](#known-limitations)) |
 | Live end-to-end validation against real API credentials (Anthropic and OpenAI) |
 | Config-driven LLM provider (`LLM_PROVIDER=anthropic\|openai`) instead of a hardcoded model |
 | Prompt evaluation regression suite: golden dataset + real-LLM harness, distinct from the hermetic `pytest` suite |
@@ -118,7 +118,7 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 
 Verified against this repo's current state, not aspirational:
 
-- **Test suite**: 103/103 `pytest` tests passing, `ruff check src tests scripts` clean — hermetic,
+- **Test suite**: 157 `pytest` tests passing (1 skipped), `ruff check src tests scripts` clean — hermetic,
   no API key or seeded vector store required.
 - **Live end-to-end run** (real OpenAI credentials, `gpt-5-mini`, objective *"Assess Acme vs Globex
   pricing strategy and recommend a competitive positioning"*): completed in one pass via
@@ -133,6 +133,22 @@ Verified against this repo's current state, not aspirational:
   > Mean ACV ≈ $275,000. ACV range = $250,000 (150K → 400K), a 166.7% increase from the low to
   > high end.
 
+- **Live end-to-end run, re-validated 2026-09-18** (real OpenAI credentials, `gpt-5-mini`,
+  objective *"Compare Acme and Globex go-to-market strategy and recommend where Acme should invest
+  next"*, `--thread-id live-openai-20260918`): Research → Analytics → Reporting → FINISH in one
+  pass. 4 rewritten queries, 12 candidates retrieved, 5 kept after reranking; 16 analytics tool
+  calls; the human-approval interrupt fired before the write; the report was written through the
+  real MCP server to `reports/compare-acme-and-globex-go-to-market-strategy-and-recommend-.md`.
+  Every figure in the report was checked against `data/raw/`: 1,200 vs 400 customers, 340 vs 900
+  employees, $150K–$400K ACV, 8–16 week implementations, founding years and HQ cities all match
+  the source text.
+
+- **Anthropic path, same date**: could not be validated live because no Anthropic key was
+  configured in this environment. The run is still useful as a guardrail check: the Analytics
+  node's authentication error was caught by the error boundary, recorded in `state.error`, and the
+  graph ended cleanly with `report_path: None` instead of crashing. Re-run
+  `LLM_PROVIDER=anthropic python scripts/run_graph_cli.py "..."` once `ANTHROPIC_API_KEY` is set.
+
 - **Prompt evaluation regression suite** (`python scripts/run_evals.py`, real OpenAI credentials):
   7/7 cases passed. Notably `analytics/globex_acv_range` — the model called 7 real statistics
   tools, and every reported figure (min $150K, max $400K, mean $275K, range $250K) traced back to
@@ -141,9 +157,29 @@ Verified against this repo's current state, not aspirational:
 
 ## Getting started
 
+### Quick start (copy-paste)
+
+The full path from a fresh clone to a written report, in order. Each step is explained in the
+numbered sections that follow.
+
+```bash
+git clone <this-repo> && cd agentic-ai
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env                 # then set ANTHROPIC_API_KEY (or LLM_PROVIDER=openai + OPENAI_API_KEY)
+python scripts/setup_env.py --skip-install   # validates packages + the key your provider needs
+python scripts/seed_vectorstore.py   # builds data/vectorstore/ from data/raw/
+pytest -q                            # 157 tests, no API key needed
+python scripts/run_graph_cli.py "Assess Acme vs Globex pricing strategy"   # real LLM calls
+```
+
+The CLI pauses before writing to disk and asks `Approve this write to disk? [y/N]`. Answer `y`
+and the report lands in `reports/<slugified-objective>.md`.
+
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11+ (`requires-python = ">=3.11"` in `pyproject.toml`; `langgraph.json` pins 3.11 for the dev server)
+- Node.js 20+ and npm — only for the optional browser UI in `frontend/`
 - An API key for one LLM provider — [Anthropic](https://console.anthropic.com/) (default) or [OpenAI](https://platform.openai.com/api-keys) — for the LLM calls made by query rewriting, supervisor routing, analytics, and report drafting
 
 ### 1. Install
@@ -198,13 +234,18 @@ pytest
 ruff check src tests scripts
 ```
 
-The test suite (103 tests) is hermetic — LLM calls, the vector store, and
-the MCP subprocess are all faked or run against real-but-local fixtures,
-so `pytest` doesn't require `ANTHROPIC_API_KEY` or the seeded vector store
-from step 3. A handful of tests do spawn the real local MCP server
-subprocess (`test_mcp_server.py`, `test_reporting_pipeline.py`) and run a
-real SQLite checkpointer round-trip (`test_checkpointing.py`) — no network
-or API key needed for any of it.
+The test suite (157 tests) is hermetic — LLM calls and the vector store are
+faked or run against real-but-local fixtures, so `pytest` doesn't require an
+API key or the seeded vector store from step 3. The MCP server tests
+(`tests/mcp/test_mcp_server.py`) use the SDK's in-process client session, so
+no subprocess is spawned there; the reporting pipeline test
+(`tests/agents/test_reporting_pipeline.py`) does spawn the real MCP server over
+stdio and writes a real file to a temp dir, and `test_checkpointing.py` runs a
+real SQLite round-trip — no network or API key needed for any of it.
+
+```bash
+ruff format --check src tests scripts   # formatting, same check CI would run
+```
 
 ### 5. Run the graph
 
@@ -215,7 +256,26 @@ python scripts/run_graph_cli.py "Assess Acme vs Globex pricing strategy"
 
 # with durable checkpointing (persists to data/checkpoints.sqlite by default):
 python scripts/run_graph_cli.py "Assess Acme vs Globex pricing strategy" --thread-id demo-1
+
+# raise the step cap for a long objective (default comes from config.py):
+python scripts/run_graph_cli.py "..." --recursion-limit 60
 ```
+
+What happens during a run:
+
+1. The objective is validated (`security/input_validation.py`) — empty or oversized input is
+   rejected before any LLM call.
+2. The supervisor routes between Research (RAG over the seeded index), Analytics (Python stat
+   tools), and Reporting until it decides to FINISH, bounded by a visit cap and the recursion
+   limit.
+3. Before the report is written, the Reporting Agent interrupts and prints the draft. Answer `y`
+   to approve, or `n` plus optional feedback to request a redraft (up to the configured number of
+   review rounds).
+4. On approval, the report is written through the local MCP filesystem server to `reports/`
+   (or `REPORTS_DIR`).
+
+Re-running with the same `--thread-id` resumes from the SQLite checkpoint instead of starting
+over. Every run spends real API money — the test suite does not.
 
 **Option B — LangGraph Studio:**
 
@@ -229,6 +289,23 @@ printed Studio URL to run it interactively, inspect state at each step,
 and time-travel through checkpoints. `langgraph dev` manages its own
 persistence — it doesn't use `checkpointing/store.py`, which is for
 standalone use outside the dev server (see `run_graph()` in `graph.py`).
+
+## Guardrails
+
+One deterministic guardrail per layer, placed where it is cheapest. None of them call a
+model, so they add no tokens and no measurable latency. Full table and rationale in
+[docs/security.md](docs/security.md).
+
+| Layer | What it does | Where |
+|---|---|---|
+| Input | Length bounds, control-char stripping, prompt-injection and exfiltration denylist, run as the first graph node so CLI, Studio and the frontend all get it | `security/input_guard.py` |
+| Retrieval | Cross-encoder score floor drops irrelevant chunks; injection scan drops poisoned ones | `retrieval/reranker.py`, `agents/research/node.py` |
+| Tool | Fixed math functions only; MCP writes `.md` inside `reports/` with size caps | `mcp_server/fs_server.py` |
+| Output | PII redaction, credential scrub, and `[unverified]` marks on figures that don't trace to evidence, shown as warnings at the approval prompt | `security/output_filters.py` |
+| Policy | Append-only audit log per run (`data/audit.jsonl`), error boundaries, recursion and visit caps | `security/audit.py`, `guardrails.py` |
+
+Every trigger is recorded as a `guardrail_events` entry in state; the CLI prints them at
+the end of a run.
 
 ## Prompt evaluation regression suite
 
@@ -310,7 +387,7 @@ LLM_PROVIDER=anthropic langgraph dev --port 2024 --no-browser
 LLM_PROVIDER=openai langgraph dev --port 2025 --no-browser
 
 # Terminal 3 — the UI itself
-cd ui
+cd frontend
 cp .env.local.example .env.local   # edit if you changed either port above
 npm install
 npm run dev
@@ -342,6 +419,8 @@ and can be overridden via `.env` or real environment variables. From
 | `VECTORSTORE_DIR` | `./data/vectorstore` | Chroma persistence directory |
 | `REPORTS_DIR` | `./reports` | Where the MCP server writes markdown reports |
 | `DATABASE_URL` | unset | If set, `get_checkpointer()` uses Postgres instead of the local SQLite file |
+| `RERANK_SCORE_FLOOR` | `-8.0` | Cross-encoder logit below which retrieved chunks are dropped |
+| `AUDIT_LOG_PATH` | `./data/audit.jsonl` | Append-only JSONL audit log of finished runs and human decisions |
 
 Other tunables (`anthropic_model` / `openai_model` names, embedding/reranker
 model names, chunk sizes, recursion limit, checkpoint DB path) have
@@ -350,9 +429,27 @@ to touch to run the demo. Every node builds its LLM through
 `llm.get_chat_model()` rather than importing a provider class directly, so
 `LLM_PROVIDER` is the only thing that needs to change to switch providers.
 
+## Documentation map
+
+| Document | What it covers |
+|---|---|
+| [README.md](README.md) (this file) | Overview, setup, run instructions, configuration |
+| [docs/architecture.md](docs/architecture.md) | Design log: layout decisions and the 2026-09 restructure |
+| [docs/security.md](docs/security.md) | Guardrails per layer, what is deliberately absent, data handling |
+| [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md) | Standing up Postgres locally and what changes for production |
+| [docs/superpowers/specs/](docs/superpowers/specs/), [docs/superpowers/plans/](docs/superpowers/plans/) | Design specs and implementation plans per feature |
+| [frontend/README.md](frontend/README.md) | Browser UI setup, env vars, scripts |
+| [CLAUDE.md](CLAUDE.md) | Conventions enforced in code, cost rules, agent/skill delegation for Claude Code |
+| [.env.example](.env.example) | Every environment variable with a comment |
+
 ## Known limitations
 
 Honest gaps, not hidden:
+
+- **GitLab CI is currently switched off.** `.gitlab-ci.yml` was emptied on 2026-09-14 (commit
+  `3fcc1fa`) while eval work was in progress and has not been restored. The previous pipeline ran
+  `ruff check` and `pytest -q` on `python:3.11-slim`; `git show 3fcc1fa^:.gitlab-ci.yml` recovers
+  it. Until then, run `pytest` and `ruff` locally before pushing.
 
 - **The Postgres checkpointer is unverified against a real database.** `get_checkpointer()`
   supports `DATABASE_URL`, but it's only been exercised via code review, not a live Postgres

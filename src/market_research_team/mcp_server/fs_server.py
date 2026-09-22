@@ -14,6 +14,11 @@ from market_research_team.config import settings
 
 mcp_server = FastMCP("market-research-reports")
 
+# Tool-layer guardrails: a report is a few pages of markdown, so anything
+# larger is a runaway model or a misuse of the tool, not a report.
+_MAX_FILENAME_LENGTH = 128
+_MAX_REPORT_BYTES = 256_000
+
 
 def _resolve_report_path(filename: str) -> Path:
     """Resolve `filename` to a path inside the reports directory.
@@ -22,6 +27,9 @@ def _resolve_report_path(filename: str) -> Path:
     components, no `..` traversal — since this server's only job is
     writing markdown reports, not arbitrary filesystem access.
     """
+
+    if len(filename) > _MAX_FILENAME_LENGTH:
+        raise ValueError(f"Report filenames must be at most {_MAX_FILENAME_LENGTH} characters.")
 
     if not filename.endswith(".md"):
         raise ValueError("Report filenames must end with '.md'.")
@@ -48,6 +56,9 @@ def write_report(filename: str, content: str) -> str:
     """
 
     path = _resolve_report_path(filename)
+    size = len(content.encode("utf-8"))
+    if size > _MAX_REPORT_BYTES:
+        raise ValueError(f"Report content is {size} bytes; the limit is {_MAX_REPORT_BYTES}.")
     path.write_text(content, encoding="utf-8")
     return str(path)
 

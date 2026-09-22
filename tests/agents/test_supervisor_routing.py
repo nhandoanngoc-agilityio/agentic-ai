@@ -12,7 +12,9 @@ from market_research_team.graph import build_production_graph
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding, RouteDecision
 
 
-def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int, int]:
+def _fake_research_pipeline(
+    objective: str,
+) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     findings: list[ResearchFinding] = [
         {
             "source": "mock://research-agent",
@@ -20,7 +22,7 @@ def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int,
             "relevance_score": 0.9,
         }
     ]
-    return findings, 1, 1
+    return findings, 1, 1, []
 
 
 def _fake_analytics_pipeline(

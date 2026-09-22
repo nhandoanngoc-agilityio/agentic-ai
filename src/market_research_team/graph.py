@@ -14,6 +14,9 @@ from market_research_team.agents.research.node import research_node
 from market_research_team.agents.supervisor.router import route_from_supervisor, supervisor_node
 from market_research_team.config import settings
 from market_research_team.guardrails import with_error_boundary
+from market_research_team.observability import flush as flush_traces
+from market_research_team.observability import get_langfuse_handler, tracing_enabled
+from market_research_team.security.input_guard import input_guard_node
 from market_research_team.state import AgentState
 
 
@@ -26,8 +29,16 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
     builder.add_node("research", with_error_boundary("research", research_node))
     builder.add_node("analytics", with_error_boundary("analytics", analytics_node))
     builder.add_node("reporting", with_error_boundary("reporting", reporting_node))
+    # Input guardrail runs first so CLI, `langgraph dev` and the frontend all
+    # get the same validation; a rejection sets `error`, which the supervisor
+    # turns into FINISH without calling the LLM.
+    builder.add_node(
+        "input_guard",
+        with_error_boundary("input_guard", input_guard_node, fallback_updates={"next": "FINISH"}),
+    )
 
-    builder.add_edge(START, "supervisor")
+    builder.add_edge(START, "input_guard")
+    builder.add_edge("input_guard", "supervisor")
     builder.add_conditional_edges(
         "supervisor",
         route_from_supervisor,
@@ -49,6 +60,11 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
 # since the dev server (and LangGraph Platform generally) manages its own
 # persistence for graphs it serves.
 graph = _build_graph()
+if tracing_enabled():
+    # Baked into the compiled graph (rather than passed per-invoke) so
+    # `langgraph dev` traces too -- Studio calls `graph.invoke`/`.stream`
+    # directly and never goes through `run_graph`.
+    graph = graph.with_config({"callbacks": [get_langfuse_handler()]})
 
 
 def build_production_graph(checkpointer: BaseCheckpointSaver[Any]):
@@ -83,12 +99,28 @@ def run_graph(
     config: RunnableConfig = {"recursion_limit": recursion_limit or settings.recursion_limit}
     if thread_id is not None:
         config["configurable"] = {"thread_id": thread_id}
+    if tracing_enabled():
+        config["callbacks"] = [get_langfuse_handler()]
 
     try:
-        # `compiled_graph: Any` (deliberate — see above) makes `target_graph`'s
-        # type partially unknown to the checker; the real object is always a
-        # CompiledStateGraph with a normal `.invoke`.
-        result = target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
+        if tracing_enabled():
+            from langfuse import propagate_attributes
+
+            objective = initial_state.get("objective") if isinstance(initial_state, dict) else None
+            with propagate_attributes(
+                trace_name="market-research-run",
+                session_id=thread_id,
+                tags=["market-research-team"],
+                metadata={"objective": objective} if objective else None,
+            ):
+                # `compiled_graph: Any` (deliberate — see above) makes `target_graph`'s
+                # type partially unknown to the checker; the real object is always a
+                # CompiledStateGraph with a normal `.invoke`.
+                result = target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
+        else:
+            result = target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
     except GraphRecursionError as exc:
         return {**initial_state, "error": f"Recursion limit reached: {exc}"}
+    finally:
+        flush_traces()
     return cast(AgentState, result)

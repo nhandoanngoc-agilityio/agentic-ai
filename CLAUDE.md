@@ -29,8 +29,10 @@ python scripts/run_evals.py [--provider openai] [--compare] [--langsmith]   # RE
 - Supervisor routing is in `agents/supervisor/router.py` (`decide_next_step`,
   `route_from_supervisor`). New routes need the conditional-edge map in `graph.py`.
 - Retrieval code (query rewriting, retriever, reranker) lives in `retrieval/`; the
-  research node in `agents/research/` only orchestrates it. Input validation is in
-  `security/`. Tests mirror these areas under `tests/<area>/`.
+  research node in `agents/research/` only orchestrates it. Guardrails (input validation,
+  output filters, shared regex patterns, audit log) are in `security/`; a node that blocks,
+  drops or redacts something returns a `guardrail_events` entry. Tests mirror these areas
+  under `tests/<area>/`.
 - Config is `config.py` (pydantic-settings). Read `.env.example` for keys; never
   open `.env`.
 - Ruff: line length 100, rules E/F/I/UP. A hook auto-formats edited `.py` files.

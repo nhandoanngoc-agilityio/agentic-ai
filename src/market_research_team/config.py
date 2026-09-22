@@ -26,9 +26,25 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"  # broadly available; model access varies by account/tier
     reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+    # Cross-encoder logit floor for retrieval. Measured on the seeded index
+    # (2026-09-18): relevant chunks score +6.6 down to about -5, off-topic
+    # queries score a flat -11. -8 drops only the clearly irrelevant tail.
+    rerank_score_floor: float = -8.0
+    audit_log_path: Path = _PROJECT_ROOT / "data" / "audit.jsonl"
+
     recursion_limit: int = 20
     checkpoint_db_path: Path = _PROJECT_ROOT / "data" / "checkpoints.sqlite"
     database_url: str | None = None
+
+    # Langfuse tracing (see observability.py). Optional: tracing is a no-op
+    # unless both keys are set, so hermetic tests and unconfigured local runs
+    # never touch the network.
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = (
+        None  # self-hosted base URL, e.g. https://langfuse.internal.example.com
+    )
+    langfuse_tracing_environment: str = "development"
 
 
 settings = Settings()

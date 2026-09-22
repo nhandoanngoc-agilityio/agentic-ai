@@ -1,11 +1,23 @@
 """Unified state schema shared across the supervisor and every agent node."""
 
+import operator
 from typing import Annotated, Literal, NotRequired, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 RouteDecision = Literal["research", "analytics", "reporting", "FINISH"]
+
+GuardrailLayer = Literal["input", "retrieval", "tool", "output", "policy"]
+
+
+class GuardrailEvent(TypedDict):
+    """One guardrail decision, recorded so the audit log and the reviewer can see
+    what was blocked, dropped, redacted or flagged during a run."""
+
+    layer: GuardrailLayer
+    rule: str
+    detail: str
 
 
 class ResearchFinding(TypedDict):
@@ -40,3 +52,6 @@ class AgentState(TypedDict):
     # supervisor would see an unfinished run and route back to reporting
     # forever -- `decide_next_step` checks it to end the run instead.
     report_discarded: NotRequired[bool]
+    # Append-only: every node that blocks, drops, redacts or flags something
+    # adds an event here. Read by the audit record at FINISH and by the CLI.
+    guardrail_events: NotRequired[Annotated[list[GuardrailEvent], operator.add]]

@@ -26,8 +26,15 @@ from market_research_team.graph import build_production_graph, run_graph
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
 
 
-def _fake_research_pipeline(objective: str) -> tuple[list[ResearchFinding], int, int]:
-    return [{"source": "mock", "content": f"finding for {objective}", "relevance_score": 0.9}], 1, 1
+def _fake_research_pipeline(
+    objective: str,
+) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
+    return (
+        [{"source": "mock", "content": f"finding for {objective}", "relevance_score": 0.9}],
+        1,
+        1,
+        [],
+    )
 
 
 def _fake_analytics_pipeline(

@@ -41,3 +41,23 @@ def test_rerank_returns_empty_list_for_no_candidates() -> None:
     results = rerank("acme", [], _FakeCrossEncoder(), top_n=5)
 
     assert results == []
+
+
+def test_rerank_score_floor_drops_low_scoring_candidates() -> None:
+    # Fake scores are term overlaps: "acme pricing" -> 2, 0, 1 for the three docs.
+    results = rerank("acme pricing", _documents(), _FakeCrossEncoder(), top_n=3, score_floor=1.0)
+
+    contents = [document.page_content for document, _score in results]
+    assert contents == [
+        "Acme pricing starts at forty nine dollars per seat.",
+        "Acme onboarding is fast for new customers.",
+    ]
+    assert all(score >= 1.0 for _document, score in results)
+
+
+def test_rerank_score_floor_can_return_nothing_for_off_topic_query() -> None:
+    assert rerank("weather tomorrow", _documents(), _FakeCrossEncoder(), score_floor=1.0) == []
+
+
+def test_rerank_without_floor_keeps_everything_up_to_top_n() -> None:
+    assert len(rerank("weather tomorrow", _documents(), _FakeCrossEncoder(), top_n=3)) == 3

@@ -10,7 +10,11 @@ from langgraph.types import interrupt
 
 from market_research_team.agents.reporting.mcp_client import load_reporting_tools
 from market_research_team.llm import get_chat_model
-from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
+from market_research_team.security.output_filters import (
+    apply_output_guardrails,
+    warnings_from_events,
+)
+from market_research_team.state import AgentState, AnalyticsResult, GuardrailEvent, ResearchFinding
 
 # Caps the human-review loop in `reporting_node` below, mirroring the
 # supervisor's `_MAX_ROUTING_VISITS` guard against an endless back-and-forth.
@@ -178,8 +182,14 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
     filename = f"{_slugify(objective)}.md"
 
     feedback: str | None = None
+    events: list[GuardrailEvent] = []
     for attempt in range(1, _MAX_REVIEW_ROUNDS + 1):
-        report_markdown = draft_report(objective, findings, results, llm, feedback=feedback)
+        raw_draft = draft_report(objective, findings, results, llm, feedback=feedback)
+        # Output guardrails: redact PII, scrub secrets, mark ungrounded
+        # figures. Nothing blocks -- the warnings travel with the interrupt so
+        # the human approves with eyes open.
+        report_markdown, round_events = apply_output_guardrails(raw_draft, findings, results)
+        events.extend(round_events)
         decision = interrupt(
             {
                 "action": "write_report",
@@ -187,12 +197,14 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
                 "content": report_markdown,
                 "attempt": attempt,
                 "max_attempts": _MAX_REVIEW_ROUNDS,
+                "warnings": warnings_from_events(round_events),
             }
         )
         if decision.get("approved"):
             report_path = asyncio.run(write_report_via_mcp(filename, report_markdown))
             return {
                 "report_path": report_path,
+                "guardrail_events": events,
                 "messages": [
                     AIMessage(content=f"Report written to {report_path}.", name="reporting_agent")
                 ],
@@ -204,6 +216,7 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
             return {
                 "report_path": None,
                 "report_discarded": True,
+                "guardrail_events": events,
                 "messages": [
                     AIMessage(
                         content="Report discarded (comparison not selected).",
@@ -216,6 +229,7 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
     return {
         "report_path": None,
         "error": f"Reporting write rejected after {_MAX_REVIEW_ROUNDS} review rounds.",
+        "guardrail_events": events,
         "messages": [
             AIMessage(
                 content=(f"Report rejected after {_MAX_REVIEW_ROUNDS} review rounds; ending run."),

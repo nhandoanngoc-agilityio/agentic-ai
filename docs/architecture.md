@@ -14,10 +14,12 @@ this alongside each day's work rather than after the fact.
   the MCP **server** (Day 8) and the MCP **client** used inside the graph
   node (Day 9) are different processes and shouldn't be conflated.
 
-## Open questions
+## Open questions (resolved)
 
-- Confirm target LLM/provider if `langchain-anthropic` default is wrong.
-- Confirm vector store choice (Chroma vs. Qdrant/pgvector) before Day 3-4 ingestion work.
+- LLM provider: config-driven via `LLM_PROVIDER=anthropic|openai` (`llm.get_chat_model()`);
+  Anthropic remains the default. Both providers are exercised by the eval suite.
+- Vector store: Chroma, persisted under `data/vectorstore/`. Postgres is used only as an
+  optional checkpointer backend (`DATABASE_URL`), not for vectors.
 
 ## 2026-09-17 — Folder restructure
 
@@ -31,3 +33,25 @@ Aligned with a "production-ai-app" reference layout. Pure moves, no behaviour ch
 - `tests/` grouped by area: `agents/`, `retrieval/`, `ingestion/`, `evaluation/`, `graph/`,
   `checkpointing/`, `mcp/`, `security/`, `scripts/`.
 - Added `AGENTS.md` (pointer to `CLAUDE.md`) and `.claude/` agents, skills, and hooks.
+
+## 2026-09-18 — Current state (documentation pass)
+
+Snapshot of what exists, for readers arriving after the sprint:
+
+- **Graph** (`graph.py`): supervisor → {research, analytics, reporting} with conditional edges
+  from `agents/supervisor/router.py`; every node wrapped by `with_error_boundary`; `run_graph()`
+  bounds recursion and catches `GraphRecursionError`.
+- **Human-in-the-loop**: the reporting node calls `interrupt()` before writing; the CLI and the
+  browser UI both resume the graph with `{approved, feedback}`.
+- **Retrieval** (`retrieval/`): query rewriting → Chroma retrieval → cross-encoder rerank, fed by
+  hierarchical chunking in `ingestion/`.
+- **MCP**: `mcp_server/` exposes filesystem writes over stdio; the reporting agent is the client.
+  Unit tests use the SDK's in-process session; one pipeline test spawns the real server.
+- **Checkpointing**: SQLite by default, Postgres when `DATABASE_URL` is set
+  (see `postgres_checkpointer.md`).
+- **Evaluation** (`evaluation/`): golden dataset + `scripts/run_evals.py`, optional LangSmith
+  datasets/experiments with LLM judges.
+- **Frontend** (`frontend/`): Next.js + CopilotKit UI streaming one run against a
+  `langgraph dev` deployment per provider.
+- **Verification**: 157 pytest tests (1 skipped), ruff clean. GitLab CI is currently disabled
+  (`.gitlab-ci.yml` is empty); see README "Known limitations".

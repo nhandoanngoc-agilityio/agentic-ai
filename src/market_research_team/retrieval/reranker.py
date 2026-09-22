@@ -23,6 +23,7 @@ def rerank(
     model: CrossEncoderModel,
     *,
     top_n: int = 5,
+    score_floor: float | None = None,
 ) -> list[tuple[Document, float]]:
     """Rescore retrieved documents against the query with a cross-encoder.
 
@@ -33,6 +34,10 @@ def rerank(
     narrowed-down candidate set. Returns up to `top_n` documents sorted
     best-first, each paired with its cross-encoder score, trimming context
     down to what's actually worth spending the LLM's context window on.
+
+    `score_floor` is a retrieval guardrail: candidates scoring below it are
+    dropped even if fewer than `top_n` remain, so an off-topic objective
+    yields an empty context instead of the least-bad chunks.
     """
 
     if not documents:
@@ -42,4 +47,6 @@ def rerank(
     scores = [float(score) for score in model.predict(pairs)]
 
     scored = sorted(zip(documents, scores), key=lambda pair: pair[1], reverse=True)
+    if score_floor is not None:
+        scored = [pair for pair in scored if pair[1] >= score_floor]
     return scored[:top_n]
