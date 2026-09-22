@@ -14,6 +14,11 @@ interface PendingInterrupt {
 
 type Provider = "openai" | "anthropic";
 
+// Mirrors `security/input_validation.py`; the graph's input guard is the
+// real check, this only keeps the UI from sending something it will reject.
+const OBJECTIVE_MAX_LENGTH = 2000;
+const OBJECTIVE_MIN_LENGTH = 8;
+
 const AGENT_ID_BY_PROVIDER: Record<Provider, string> = {
   openai: "openaiAgent",
   anthropic: "anthropicAgent",
@@ -126,14 +131,21 @@ export default function ComparePage() {
           <input
             id="objective"
             value={objective}
+            maxLength={OBJECTIVE_MAX_LENGTH}
             onChange={(e) => setObjective(e.target.value)}
             style={{ width: "100%", marginTop: "0.5rem" }}
           />
+          <small aria-live="polite">
+            {objective.length}/{OBJECTIVE_MAX_LENGTH} characters
+            {objective.trim().length > 0 && objective.trim().length < OBJECTIVE_MIN_LENGTH
+              ? ` (minimum ${OBJECTIVE_MIN_LENGTH})`
+              : ""}
+          </small>
         </div>
         <button
           type="button"
           onClick={handleRun}
-          disabled={!objective || (running && !runFailed)}
+          disabled={objective.trim().length < OBJECTIVE_MIN_LENGTH || (running && !runFailed)}
           style={{ marginTop: "0.5rem" }}
         >
           Run

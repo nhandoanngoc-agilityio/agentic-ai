@@ -19,6 +19,9 @@ data/raw/*
 data/processed/*
 data/vectorstore/*
 data/checkpoints.sqlite
+data/checkpoints.sqlite-shm
+data/checkpoints.sqlite-wal
+data/audit.jsonl
 data/eval_results/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep

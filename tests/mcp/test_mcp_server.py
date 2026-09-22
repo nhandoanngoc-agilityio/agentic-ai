@@ -90,3 +90,22 @@ async def test_list_reports_empty_when_reports_dir_missing() -> None:
 
     assert result.isError is False
     assert result.structuredContent == {"result": []}
+
+
+async def test_write_report_rejects_oversized_content() -> None:
+    async with create_connected_server_and_client_session(mcp_server) as session:
+        result = await session.call_tool(
+            "write_report", {"filename": "big.md", "content": "x" * 256_001}
+        )
+
+    assert result.isError is True
+    assert not (settings.reports_dir / "big.md").exists()
+
+
+async def test_write_report_rejects_overlong_filename() -> None:
+    filename = "a" * 126 + ".md"
+    async with create_connected_server_and_client_session(mcp_server) as session:
+        result = await session.call_tool("write_report", {"filename": filename, "content": "hi"})
+
+    assert result.isError is True
+    assert not (settings.reports_dir / filename).exists()

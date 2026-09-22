@@ -17,6 +17,7 @@ from langgraph.types import Command
 
 from market_research_team.checkpointing.store import get_checkpointer
 from market_research_team.graph import build_production_graph, run_graph
+from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
 
@@ -38,6 +39,11 @@ def _prompt_for_approval(interrupt_value: dict[str, Any]) -> dict[str, Any]:
         f"(review round {interrupt_value.get('attempt')}/{interrupt_value.get('max_attempts')}) ---"
     )
     print(interrupt_value.get("content", ""))
+    warnings = interrupt_value.get("warnings") or []
+    if warnings:
+        print("\n--- guardrail warnings (review before approving) ---")
+        for warning in warnings:
+            print(f"  ! {warning}")
     print("--- end of draft ---")
 
     answer = input("Approve this write to disk? [y/N]: ").strip().lower()
@@ -81,6 +87,7 @@ def main() -> None:
 
     while result.get("__interrupt__"):
         decision = _prompt_for_approval(result["__interrupt__"][0].value)
+        audit.record("human_decision", thread_id, decision=decision)
         result = run_graph(
             Command(resume=decision),
             compiled_graph=compiled_graph,
@@ -93,6 +100,10 @@ def main() -> None:
     print(f"report_path: {result.get('report_path')}")
     print(f"research_findings: {len(result.get('research_findings', []))}")
     print(f"analytics_results: {len(result.get('analytics_results', []))}")
+    events = result.get("guardrail_events", [])
+    print(f"guardrail_events: {len(events)}")
+    for event in events:
+        print(f"  [{event['layer']}/{event['rule']}] {event['detail']}")
     print("messages:")
     for message in result.get("messages", []):
         name = getattr(message, "name", None) or "?"

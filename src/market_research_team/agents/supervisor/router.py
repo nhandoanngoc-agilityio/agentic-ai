@@ -9,6 +9,7 @@ from langgraph.graph import END
 from pydantic import BaseModel, Field
 
 from market_research_team.llm import get_chat_model
+from market_research_team.security import audit
 from market_research_team.state import AgentState, RouteDecision
 
 _MAX_ROUTING_VISITS = 6
@@ -107,8 +108,31 @@ def run_supervisor_decision(state: AgentState) -> RouteDecision:
     return decide_next_step(state, llm)
 
 
+def _record_run_end(state: AgentState) -> None:
+    """Policy guardrail: one audit line per finished run, from whichever
+    surface drove it (CLI, `langgraph dev`, frontend)."""
+
+    audit.record(
+        "run_finished",
+        audit.current_thread_id(),
+        objective=state["objective"],
+        route_trace=[
+            getattr(message, "name", None) or "?"
+            for message in state["messages"]
+            if getattr(message, "name", None) != "supervisor"
+        ],
+        research_findings=len(state.get("research_findings", [])),
+        analytics_results=len(state.get("analytics_results", [])),
+        report_path=state.get("report_path"),
+        error=state.get("error"),
+        guardrail_events=state.get("guardrail_events", []),
+    )
+
+
 def supervisor_node(state: AgentState) -> dict[str, Any]:
     next_step = run_supervisor_decision(state)
+    if next_step == "FINISH":
+        _record_run_end(state)
     return {
         "next": next_step,
         "messages": [AIMessage(content=_ROUTE_ANNOUNCEMENT[next_step], name="supervisor")],
