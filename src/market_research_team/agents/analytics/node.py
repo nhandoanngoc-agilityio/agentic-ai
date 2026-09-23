@@ -22,7 +22,9 @@ _SYSTEM_PROMPT = (
     "growth rates, ranges) that help compare them. Call a tool for every "
     "number you report — never state a computed metric without a matching "
     "tool call. If the findings don't contain enough numeric data for a "
-    "calculation, skip it rather than inventing numbers."
+    "calculation, skip it rather than inventing numbers. When the objective "
+    "compares two or more named subjects (e.g. companies), pass that "
+    "subject's name as the tool's `entity` argument on every call about it."
 )
 
 
@@ -95,6 +97,7 @@ def run_tool_calling_loop(
                     "metric": tool_name,
                     "value": float(output),
                     "detail": f"{tool_name}({tool_args}) = {output}",
+                    "entity": tool_args.get("entity"),
                 }
             )
             messages.append(ToolMessage(content=str(output), tool_call_id=tool_call["id"]))

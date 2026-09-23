@@ -51,7 +51,21 @@ Snapshot of what exists, for readers arriving after the sprint:
   (see `postgres_checkpointer.md`).
 - **Evaluation** (`evaluation/`): golden dataset + `scripts/run_evals.py`, optional LangSmith
   datasets/experiments with LLM judges.
-- **Frontend** (`frontend/`): Next.js + CopilotKit UI streaming one run against a
-  `langgraph dev` deployment per provider.
 - **Verification**: 157 pytest tests (1 skipped), ruff clean. GitLab CI is currently disabled
   (`.gitlab-ci.yml` is empty); see README "Known limitations".
+
+## 2026-09-22 — Next.js frontend replaced with a Gradio app
+
+- Removed `frontend/` (Next.js + CopilotKit) entirely — it drove the graph by calling a
+  `langgraph dev` deployment over HTTP/streaming, in a separate Node.js process per LLM provider.
+- Added `gradio_app/` (launched via `scripts/run_gradio.py`): a Gradio app that runs the graph
+  **in-process**, calling `build_production_graph(get_checkpointer())` and `run_graph()` directly
+  — the same pattern `scripts/run_graph_cli.py` uses for the terminal flow. There is no separate
+  API server and no dual-port provider setup; the app talks to whichever provider `LLM_PROVIDER`
+  selects, the same as every other flow in this repo.
+- The Reporting Agent's human-approval `interrupt()` is unchanged. The Gradio app's Approve/Reject
+  buttons resume the paused thread with `Command(resume={"approved": ..., "feedback": ...})`,
+  mirroring the CLI's prompt-driven resume.
+- `langgraph.json` and the `graph` export are untouched — `langgraph dev` / LangGraph Studio still
+  work exactly as before for debugging and time-travel; they're just no longer what the UI talks
+  to.

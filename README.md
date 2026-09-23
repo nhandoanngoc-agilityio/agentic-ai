@@ -75,10 +75,10 @@ src/market_research_team/
 ├── checkpointing/            # SQLite / Postgres checkpointer factory
 └── evaluation/               # golden dataset + offline/LangSmith prompt-eval harness
 
-frontend/      # Next.js + CopilotKit comparison UI (own package.json, tests via `npm test`)
+gradio_app/    # Gradio chat UI (Research + Reports tabs), runs the graph in-process
 data/          # raw → processed documents, persisted vector store, checkpoint DB, eval results
 reports/       # markdown reports written by the MCP server
-scripts/       # setup_env.py, seed_vectorstore.py, run_graph_cli.py, run_evals.py
+scripts/       # setup_env.py, seed_vectorstore.py, run_graph_cli.py, run_evals.py, run_gradio.py
 tests/         # pytest suite, grouped by area (agents/, retrieval/, evaluation/, graph/, ...)
 docs/          # architecture notes, design specs and plans under docs/superpowers/
 CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); config in .claude/
@@ -179,7 +179,6 @@ and the report lands in `reports/<slugified-objective>.md`.
 ### Prerequisites
 
 - Python 3.11+ (`requires-python = ">=3.11"` in `pyproject.toml`; `langgraph.json` pins 3.11 for the dev server)
-- Node.js 20+ and npm — only for the optional browser UI in `frontend/`
 - An API key for one LLM provider — [Anthropic](https://console.anthropic.com/) (default) or [OpenAI](https://platform.openai.com/api-keys) — for the LLM calls made by query rewriting, supervisor routing, analytics, and report drafting
 
 ### 1. Install
@@ -298,7 +297,7 @@ model, so they add no tokens and no measurable latency. Full table and rationale
 
 | Layer | What it does | Where |
 |---|---|---|
-| Input | Length bounds, control-char stripping, prompt-injection and exfiltration denylist, run as the first graph node so CLI, Studio and the frontend all get it | `security/input_guard.py` |
+| Input | Length bounds, control-char stripping, prompt-injection and exfiltration denylist, run as the first graph node so CLI, Studio and the Gradio UI all get it | `security/input_guard.py` |
 | Retrieval | Cross-encoder score floor drops irrelevant chunks; injection scan drops poisoned ones | `retrieval/reranker.py`, `agents/research/node.py` |
 | Tool | Fixed math functions only; MCP writes `.md` inside `reports/` with size caps | `mcp_server/fs_server.py` |
 | Output | PII redaction, credential scrub, and `[unverified]` marks on figures that don't trace to evidence, shown as warnings at the approval prompt | `security/output_filters.py` |
@@ -341,67 +340,29 @@ categories gets its cases mirrored into a LangSmith Dataset
 deterministic check and a category-tailored LLM judge (relevance / groundedness / appropriateness
 depending on category). See `src/market_research_team/evaluation/langsmith_eval.py`.
 
-## Streaming comparison UI
+## Gradio UI
 
-A browser UI (`frontend/`, Next.js + CopilotKit) that runs one objective through a single provider —
-pick Anthropic or OpenAI from a dropdown (defaults to OpenAI) — and streams the run live. Once the
-draft is ready, it shows the report alongside the research findings and analytics results it was
-built from, plus run stats (research findings, analytics results, supervisor visits, elapsed
-time), so every number in the
-draft is traceable to a real row. Approve or reject-with-feedback exactly as the CLI already does
-(`scripts/run_graph_cli.py`) — a rejection triggers a redraft.
-
-Both `langgraph dev` deployments below stay running throughout, even though only one is called
-per run — that's what lets the dropdown switch providers without restarting anything. Requires
-**both** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` set for that reason, unlike every other flow in
-this repo, which needs only one provider's key.
-
-### First: remove `LLM_PROVIDER` from `.env`
-
-**This step is not optional — skip it and both ports silently run the same provider.**
-
-`langgraph.json` declares `"env": ".env"`, and the dev server applies every variable it finds
-there with an unconditional `os.environ[key] = value` (see `patch_environment` in
-`langgraph_api/cli.py`). So a `LLM_PROVIDER=` line in `.env` *overwrites* the one you export on
-the command line — identically for both processes. The UI's dropdown labels ("Anthropic" /
-"OpenAI") are client-side strings naming which *port* it's calling, not which provider is actually
-running on it, so a misconfigured run looks completely normal while both ports are on the same
-provider.
-
-Comment out or delete the `LLM_PROVIDER=` line in your `.env` before starting the two dev
-servers. With no value in `.env`, nothing overwrites the shell-exported one, and each process
-picks up the provider you gave it. (Every other flow in this repo is single-provider and reads
-`LLM_PROVIDER` from `.env` as usual, so put the line back when you're done.)
+A Gradio chat app (`gradio_app/`) that runs the graph in-process — no separate `langgraph dev`
+deployment required. Install the `ui` extra and launch it:
 
 ```bash
-grep -n '^LLM_PROVIDER=' .env   # must print nothing before you continue
+pip install -e ".[dev,ui]"
+python scripts/run_gradio.py
 ```
 
-### Then: three processes, each in its own terminal
+Open the printed local URL (typically `http://127.0.0.1:7860`). It has two tabs:
 
-```bash
-# Terminal 1 — Anthropic-backed graph deployment
-LLM_PROVIDER=anthropic langgraph dev --port 2024 --no-browser
+- **Research** — submit an objective and watch the graph run against the configured
+  `LLM_PROVIDER`. The Reporting Agent's draft pauses for human approval exactly as it does for
+  the CLI (`scripts/run_graph_cli.py`); Approve/Reject buttons resume the same in-process run via
+  `Command(resume=...)` on the paused thread, with an optional feedback field driving a redraft on
+  reject. Per-entity comparison charts are built from the run's analytics results once it
+  finishes.
+- **Reports** — browse markdown reports already written to `reports/` (or `REPORTS_DIR`).
 
-# Terminal 2 — OpenAI-backed graph deployment
-LLM_PROVIDER=openai langgraph dev --port 2025 --no-browser
-
-# Terminal 3 — the UI itself
-cd frontend
-cp .env.local.example .env.local   # edit if you changed either port above
-npm install
-npm run dev
-```
-
-Open `http://localhost:3000`, pick a provider (or leave it on the OpenAI default), enter an
-objective, and click "Run". See `frontend/README.md` for frontend-specific details.
-
-To sanity-check which provider a port is *actually* running, temporarily unset one key in `.env`
-(not just the shell): with `OPENAI_API_KEY` empty there, only a run against the OpenAI-backed port
-fails (the failure surfaces via `state.error`, since `get_chat_model()` builds `ChatOpenAI` only
-when `LLM_PROVIDER=openai`). With LangSmith tracing on (`LANGCHAIN_TRACING_V2=true`), each run's
-trace also names the concrete model — `claude-sonnet-5` vs `gpt-4o-mini` — as a non-destructive
-alternative check.
+Because the app calls `build_production_graph(get_checkpointer())` and `run_graph()` directly in
+the same process (the same pattern as `run_graph_cli.py`), it needs only the one provider key that
+pattern already requires — no dual-port setup, no `LLM_PROVIDER` juggling.
 
 ## Configuration
 
@@ -438,7 +399,7 @@ to touch to run the demo. Every node builds its LLM through
 | [docs/security.md](docs/security.md) | Guardrails per layer, what is deliberately absent, data handling |
 | [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md) | Standing up Postgres locally and what changes for production |
 | [docs/superpowers/specs/](docs/superpowers/specs/), [docs/superpowers/plans/](docs/superpowers/plans/) | Design specs and implementation plans per feature |
-| [frontend/README.md](frontend/README.md) | Browser UI setup, env vars, scripts |
+| [gradio_app/](gradio_app/) | Gradio UI source — Research/Reports tabs, submit/approve/reject handlers |
 | [CLAUDE.md](CLAUDE.md) | Conventions enforced in code, cost rules, agent/skill delegation for Claude Code |
 | [.env.example](.env.example) | Every environment variable with a comment |
 
@@ -459,8 +420,7 @@ Honest gaps, not hidden:
 - **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
   programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
   been clicked through interactively.
-- **The streaming comparison UI has no automated browser test coverage.** Its components are
-  covered by Vitest/React Testing Library, but the full two-provider run-and-compare flow against
-  real `langgraph dev` deployments is a manual check, the same way LangGraph Studio's browser UI
-  is.
+- **The Gradio UI has no automated browser test coverage.** `gradio_app/` is covered by pytest at
+  the handler level (submit/approve/reject logic, chart building), but actually clicking through
+  the running app is a manual check, the same way LangGraph Studio's browser UI is.
 
