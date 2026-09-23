@@ -97,3 +97,38 @@ def test_run_tool_calling_loop_stops_at_max_iterations() -> None:
     assert len(results) == 2
     assert llm.bound is not None
     assert llm.bound.call_count == 2
+
+
+def test_run_tool_calling_loop_tags_results_with_entity_from_tool_args() -> None:
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "mean",
+                "args": {"values": [2, 4, 6], "entity": "Acme"},
+                "id": "call-1",
+                "type": "tool_call",
+            }
+        ],
+    )
+    final_message = AIMessage(content="Done.", tool_calls=[])
+    llm = _ScriptedLLM([tool_call_message, final_message])
+
+    results = run_tool_calling_loop(llm, [mean], "Compare pricing", [])  # type: ignore[arg-type]
+
+    assert results[0]["entity"] == "Acme"
+
+
+def test_run_tool_calling_loop_entity_defaults_to_none_when_omitted() -> None:
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "mean", "args": {"values": [2, 4, 6]}, "id": "call-1", "type": "tool_call"}
+        ],
+    )
+    final_message = AIMessage(content="Done.", tool_calls=[])
+    llm = _ScriptedLLM([tool_call_message, final_message])
+
+    results = run_tool_calling_loop(llm, [mean], "Compare pricing", [])  # type: ignore[arg-type]
+
+    assert results[0]["entity"] is None

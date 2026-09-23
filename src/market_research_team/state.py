@@ -34,6 +34,10 @@ class AnalyticsResult(TypedDict):
     metric: str
     value: float
     detail: str
+    # Which compared subject this metric is about (e.g. "Acme"), when the
+    # objective compares multiple named entities. None for single-subject
+    # runs; set from the `entity` tool argument in `run_tool_calling_loop`.
+    entity: str | None
 
 
 class AgentState(TypedDict):

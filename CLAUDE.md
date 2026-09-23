@@ -2,7 +2,7 @@
 
 Multi-agent LangGraph demo: a supervisor routes between research (RAG), analytics
 (Python stat tools), and reporting (writes markdown via a local MCP filesystem
-server) plus a Next.js UI in `frontend/`. Architecture details: `docs/architecture.md`. Design specs:
+server) plus a Gradio chat UI (`gradio_app/`). Architecture details: `docs/architecture.md`. Design specs:
 `docs/superpowers/specs/`, plans: `docs/superpowers/plans/`.
 
 ## Commands
@@ -11,9 +11,10 @@ server) plus a Next.js UI in `frontend/`. Architecture details: `docs/architectu
 source .venv/bin/activate
 pip install -e ".[dev]"                      # or: python scripts/setup_env.py
 pytest                                       # hermetic, no API key needed
-ruff check src tests scripts && ruff format --check src tests scripts
+ruff check src tests scripts gradio_app && ruff format --check src tests scripts gradio_app
 python scripts/seed_vectorstore.py           # rebuild Chroma index from data/raw/
 python scripts/run_graph_cli.py "<objective>" [--thread-id id]   # REAL LLM CALLS
+python scripts/run_gradio.py                 # launches the Gradio UI
 langgraph dev --no-browser                   # LangGraph Studio on :2024
 python scripts/run_evals.py [--provider openai] [--compare] [--langsmith]   # REAL LLM CALLS
 ```

@@ -58,3 +58,12 @@ def test_compound_growth_rate() -> None:
 def test_compound_growth_rate_rejects_non_positive_start() -> None:
     with pytest.raises(ValueError):
         compound_growth_rate.invoke({"start_value": 0, "end_value": 10, "periods": 2})
+
+
+def test_mean_accepts_optional_entity_without_affecting_value() -> None:
+    assert mean.invoke({"values": [1, 2, 3, 4], "entity": "Acme"}) == 2.5
+
+
+def test_mean_entity_defaults_to_none_when_omitted() -> None:
+    # Existing call shape (no entity) must keep working unchanged.
+    assert mean.invoke({"values": [1, 2, 3, 4]}) == 2.5
