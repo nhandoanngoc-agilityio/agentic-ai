@@ -1,23 +1,34 @@
-"""Optional Langfuse tracing.
+"""Optional Langfuse tracing, plus local token-usage tracking.
 
-Tracing is enabled only when `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`
-are set (see `config.py`); otherwise every helper here is a no-op. This keeps
-`pytest` hermetic (no network, no configured client) and keeps unconfigured
-local runs silent instead of erroring.
+Langfuse tracing is enabled only when `LANGFUSE_PUBLIC_KEY` and
+`LANGFUSE_SECRET_KEY` are set (see `config.py`); otherwise every Langfuse
+helper here is a no-op. This keeps `pytest` hermetic (no network, no
+configured client) and keeps unconfigured local runs silent instead of
+erroring.
 
 The Langfuse SDK's default client (`get_client()` with no arguments) reads
 its credentials from `os.environ`, not from an app's own config object. Since
 `config.py` loads `.env` into a pydantic-settings object rather than into
 `os.environ`, `_client()` copies the relevant settings into `os.environ`
 (only when tracing is enabled) before the first `get_client()` call.
+
+`TokenUsageCallbackHandler` is unrelated to Langfuse: it's a local, always-on
+signal (see `security/audit.py`) that exists regardless of whether tracing
+is configured, mirroring the local latency/fallback-event tracking.
 """
 
 from __future__ import annotations
 
 import os
 from functools import lru_cache
+from typing import Any
+from uuid import UUID
+
+from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
 
 from market_research_team.config import settings
+from market_research_team.security import audit
 
 
 def tracing_enabled() -> bool:
@@ -51,8 +62,66 @@ def get_langfuse_handler():
     return CallbackHandler()
 
 
+def record_cache_event(layer: str, *, hit: bool, key_hash: str, latency_ms: float) -> None:
+    """Emit a cache hit/miss as a point event on the current trace.
+
+    No-op when tracing is disabled, and never raises -- a Langfuse hiccup
+    must not break the research pipeline.
+    """
+    if not tracing_enabled():
+        return
+    try:
+        _client().create_event(
+            name=f"cache.{layer}",
+            input={"key_hash": key_hash},
+            output={"hit": hit},
+            metadata={"latency_ms": latency_ms},
+        )
+    except Exception:
+        pass
+
+
 def flush() -> None:
     """Force-send buffered traces. Call before a short-lived process exits
     (CLI scripts, evals) -- the background flush thread may not get to run."""
     if tracing_enabled():
         _client().flush()
+
+
+class TokenUsageCallbackHandler(BaseCallbackHandler):
+    """Records per-call token usage to the local audit log.
+
+    Bound once per model in `llm.py::get_chat_model()`, so every call site
+    gets it automatically. The calling component is read from the run's
+    `tags` (each call site passes `config={"tags": [component_name]}`) --
+    without a tag, usage is still recorded under `component="untagged"`
+    rather than silently dropped.
+    """
+
+    def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            component = tags[0] if tags else "untagged"
+            for generation_list in response.generations:
+                for generation in generation_list:
+                    message = getattr(generation, "message", None)
+                    usage = getattr(message, "usage_metadata", None) if message else None
+                    if not usage:
+                        continue
+                    audit.record(
+                        "llm_usage",
+                        audit.current_thread_id(),
+                        component=component,
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                        total_tokens=usage.get("total_tokens", 0),
+                    )
+        except Exception:
+            pass

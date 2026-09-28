@@ -52,9 +52,18 @@ def _ask_llm_for_route(
     )
     structured_llm = llm.with_structured_output(_SupervisorDecision)
     decision = structured_llm.invoke(
-        [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=context)]
+        [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=context)],
+        config={"tags": ["supervisor_router"]},
     )
-    return decision.next if decision.next in allowed else allowed[0]
+    if decision.next not in allowed:
+        audit.record(
+            "fallback_triggered",
+            audit.current_thread_id(),
+            component="supervisor_router",
+            reason=f"invalid_llm_choice: {decision.next!r} not in {allowed}",
+        )
+        return allowed[0]
+    return decision.next
 
 
 def decide_next_step(state: AgentState, llm: BaseChatModel) -> RouteDecision:
@@ -66,8 +75,10 @@ def decide_next_step(state: AgentState, llm: BaseChatModel) -> RouteDecision:
     explicit check the run would be routed back to Reporting to redraft
     forever), Analytics needs at least one research pass to have something to
     analyze, and once a report has been written there's nothing left to
-    orchestrate. Within those constraints,
-    the LLM picks whether to proceed or hand back for another round —
+    orchestrate. A response-cache hit (`from_response_cache`, see
+    `caching/response_cache.py`) skips straight to Reporting since Research
+    and Analytics already ran for this exact objective. Within those
+    constraints, the LLM picks whether to proceed or hand back for another round —
     capped by `_MAX_ROUTING_VISITS` so a bad decision can't loop forever,
     and clamped to the currently allowed options so a malformed answer
     can't route somewhere invalid. Falls back to the safest allowed option
@@ -79,6 +90,13 @@ def decide_next_step(state: AgentState, llm: BaseChatModel) -> RouteDecision:
 
     if state.get("report_discarded"):
         return "FINISH"
+
+    if (
+        state.get("from_response_cache")
+        and state.get("analytics_results")
+        and not state.get("report_path")
+    ):
+        return "reporting"
 
     if not state.get("research_findings"):
         return "research"
@@ -97,7 +115,13 @@ def decide_next_step(state: AgentState, llm: BaseChatModel) -> RouteDecision:
 
     try:
         return _ask_llm_for_route(state, llm, allowed)
-    except Exception:
+    except Exception as exc:
+        audit.record(
+            "fallback_triggered",
+            audit.current_thread_id(),
+            component="supervisor_router",
+            reason=f"exception: {exc}",
+        )
         return allowed[-1]
 
 

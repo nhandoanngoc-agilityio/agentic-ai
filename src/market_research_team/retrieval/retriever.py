@@ -20,9 +20,9 @@ def load_vectorstore(
     embedding model is actually needed.
     """
 
-    from langchain_huggingface import HuggingFaceEmbeddings
+    from market_research_team.caching.memo import cached_embeddings
 
-    embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
+    embeddings = cached_embeddings(embedding_model_name)
     return Chroma(
         collection_name=collection_name,
         embedding_function=embeddings,

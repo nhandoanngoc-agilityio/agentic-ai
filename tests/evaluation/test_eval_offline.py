@@ -12,11 +12,13 @@ from langchain_core.messages import AIMessage
 
 from market_research_team import graph as graph_module
 from market_research_team.config import settings
+from market_research_team.evaluation import offline_eval
 from market_research_team.evaluation.offline_eval import (
     evaluate_analytics,
     evaluate_full_pipeline,
     evaluate_query_rewriter,
     evaluate_reporting,
+    evaluate_retrieval,
     evaluate_supervisor_decision,
     run_all,
     save_results,
@@ -33,7 +35,7 @@ class _FakeStructuredLLM:
     def __init__(self, result: _FakeStructuredResult) -> None:
         self._result = result
 
-    def invoke(self, _messages: list[object]) -> _FakeStructuredResult:
+    def invoke(self, _messages: list[object], config: object = None) -> _FakeStructuredResult:
         return self._result
 
 
@@ -61,7 +63,7 @@ class _FakeToolBoundLLM:
     def __init__(self, responses: list[AIMessage]) -> None:
         self._responses = list(responses)
 
-    def invoke(self, _messages: list[object]) -> AIMessage:
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
         return self._responses.pop(0)
 
 
@@ -81,7 +83,7 @@ class _FakeReportingLLM:
     def __init__(self, content: str) -> None:
         self._content = content
 
-    def invoke(self, _messages: list[object]) -> AIMessage:
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
         return AIMessage(content=self._content)
 
 
@@ -101,6 +103,34 @@ def test_evaluate_query_rewriter_fails_without_keyword_coverage() -> None:
 
     acme_result = next(r for r in results if r.case_name == "acme_vs_globex_pricing")
     assert not acme_result.passed
+
+
+def test_evaluate_retrieval_passes_when_expected_source_retrieved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_run_research_pipeline(objective: str):
+        findings = [{"source": "competitor_acme.md", "content": "x", "relevance_score": 0.9}]
+        return findings, 1, 1, []
+
+    monkeypatch.setattr(offline_eval, "run_research_pipeline", _fake_run_research_pipeline)
+
+    results = evaluate_retrieval("fake-provider")
+
+    assert results
+    assert all(result.passed for result in results if result.case_name == "acme_pricing_retrieval")
+
+
+def test_evaluate_retrieval_fails_when_expected_source_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_run_research_pipeline(objective: str):
+        return [], 1, 0, []
+
+    monkeypatch.setattr(offline_eval, "run_research_pipeline", _fake_run_research_pipeline)
+
+    results = evaluate_retrieval("fake-provider")
+
+    assert all(not result.passed for result in results)
 
 
 def test_evaluate_supervisor_decision_passes_on_allowed_choice() -> None:

@@ -81,6 +81,30 @@ def test_reporting_node_pauses_before_writing_and_writes_on_approval(
     assert "__interrupt__" not in result
 
 
+def test_reporting_node_populates_response_cache_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reporting_node_module, "draft_report", _fake_draft_report_recording([]))
+    calls: list[tuple[Any, Any, Any, Any]] = []
+    monkeypatch.setattr(
+        reporting_node_module,
+        "put_cached_response",
+        lambda objective, findings, results, persist_dir: calls.append(
+            (objective, findings, results, persist_dir)
+        ),
+    )
+
+    graph = _compiled_graph()
+    config: dict[str, Any] = {"configurable": {"thread_id": "t-cache"}}
+    graph.invoke(_initial_state(), config=config)
+
+    assert len(calls) == 1
+    objective, findings, results, _persist_dir = calls[0]
+    assert objective == "Assess competitor pricing strategy"
+    assert findings == []
+    assert results == []
+
+
 def test_reporting_node_redrafts_with_feedback_after_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

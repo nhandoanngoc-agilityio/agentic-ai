@@ -4,6 +4,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from market_research_team.security import audit
+
 _SYSTEM_PROMPT = (
     "You are a search query planner for a market and competitor research "
     "assistant backed by a vector database of competitor profiles and "
@@ -38,10 +40,25 @@ def rewrite_and_expand(objective: str, llm: BaseChatModel) -> list[str]:
             [
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=f"<research_objective>\n{objective}\n</research_objective>"),
-            ]
+            ],
+            config={"tags": ["query_rewriter"]},
         )
         queries = [query.strip() for query in result.queries if query.strip()]
-    except Exception:
+    except Exception as exc:
+        audit.record(
+            "fallback_triggered",
+            audit.current_thread_id(),
+            component="query_rewriter",
+            reason=f"exception: {exc}",
+        )
         return [objective]
 
-    return queries or [objective]
+    if not queries:
+        audit.record(
+            "fallback_triggered",
+            audit.current_thread_id(),
+            component="query_rewriter",
+            reason="empty_result",
+        )
+        return [objective]
+    return queries

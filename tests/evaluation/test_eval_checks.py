@@ -48,6 +48,31 @@ def test_check_min_length() -> None:
     assert not passed
 
 
+def test_check_source_coverage_passes_when_expected_source_retrieved() -> None:
+    findings = [{"source": "competitor_acme.md", "content": "x", "relevance_score": 0.9}]
+    passed, _ = checks.check_source_coverage(findings, ["competitor_acme.md"], min_hits=1)
+    assert passed
+
+
+def test_check_source_coverage_fails_when_expected_source_missing() -> None:
+    findings = [{"source": "market_overview.md", "content": "x", "relevance_score": 0.9}]
+    passed, _ = checks.check_source_coverage(findings, ["competitor_acme.md"], min_hits=1)
+    assert not passed
+
+
+def test_check_source_coverage_passes_trivially_with_no_requirement() -> None:
+    passed, _ = checks.check_source_coverage([], [], min_hits=1)
+    assert passed
+
+
+def test_check_source_coverage_requires_min_hits() -> None:
+    findings = [{"source": "competitor_acme.md", "content": "x", "relevance_score": 0.9}]
+    passed, _ = checks.check_source_coverage(
+        findings, ["competitor_acme.md", "competitor_globex.md"], min_hits=2
+    )
+    assert not passed
+
+
 def test_check_any_value_matches_within_tolerance() -> None:
     results = [{"metric": "range", "value": 250000.0, "detail": "d"}]
     passed, _ = checks.check_any_value_matches(results, [250000.0], tolerance=1.0)

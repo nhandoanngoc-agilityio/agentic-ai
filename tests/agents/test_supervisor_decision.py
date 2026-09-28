@@ -17,7 +17,7 @@ class _FakeStructuredLLM:
     def __init__(self, result: _FakeDecision) -> None:
         self._result = result
 
-    def invoke(self, _messages: list[object]) -> _FakeDecision:
+    def invoke(self, _messages: list[object], config: object = None) -> _FakeDecision:
         return self._result
 
 
@@ -47,8 +47,9 @@ def _state(
     analytics_results: list | None = None,
     report_path: str | None = None,
     supervisor_visits: int = 0,
+    from_response_cache: bool = False,
 ) -> AgentState:
-    return {
+    state: AgentState = {
         "messages": [
             AIMessage(content="Routing.", name="supervisor") for _ in range(supervisor_visits)
         ],
@@ -58,6 +59,9 @@ def _state(
         "analytics_results": analytics_results or [],
         "report_path": report_path,
     }
+    if from_response_cache:
+        state["from_response_cache"] = True
+    return state
 
 
 def test_error_in_state_short_circuits_to_finish_without_calling_llm() -> None:
@@ -73,6 +77,37 @@ def test_routes_to_research_when_no_findings_without_calling_llm() -> None:
     result = decide_next_step(_state(), _ExplodingLLM())  # type: ignore[arg-type]
 
     assert result == "research"
+
+
+def test_response_cache_hit_routes_straight_to_reporting_without_calling_llm() -> None:
+    state = _state(
+        research_findings=[_FINDING], analytics_results=[_RESULT], from_response_cache=True
+    )
+
+    result = decide_next_step(state, _ExplodingLLM())  # type: ignore[arg-type]
+
+    assert result == "reporting"
+
+
+def test_response_cache_flag_without_analytics_results_falls_through_to_llm() -> None:
+    state = _state(research_findings=[_FINDING], from_response_cache=True)
+
+    result = decide_next_step(state, _FakeLLM("analytics"))  # type: ignore[arg-type]
+
+    assert result == "analytics"
+
+
+def test_response_cache_flag_is_ignored_once_report_already_written() -> None:
+    state = _state(
+        research_findings=[_FINDING],
+        analytics_results=[_RESULT],
+        report_path="reports/mock-report.md",
+        from_response_cache=True,
+    )
+
+    result = decide_next_step(state, _ExplodingLLM())  # type: ignore[arg-type]
+
+    assert result == "FINISH"
 
 
 def test_finishes_when_report_already_written_without_calling_llm() -> None:
@@ -101,20 +136,37 @@ def test_asks_llm_to_choose_among_all_three_once_analytics_done() -> None:
     assert decide_next_step(state, _FakeLLM("research")) == "research"  # type: ignore[arg-type]
 
 
-def test_clamps_invalid_llm_choice_to_the_safe_default() -> None:
+def test_clamps_invalid_llm_choice_to_the_safe_default(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        router_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
     state = _state(research_findings=[_FINDING])
 
     result = decide_next_step(state, _FakeLLM("reporting"))  # type: ignore[arg-type]
 
     assert result == "research"
+    assert len(calls) == 1
+    assert calls[0]["component"] == "supervisor_router"
+    assert calls[0]["reason"].startswith("invalid_llm_choice:")
 
 
-def test_falls_back_to_safe_default_on_llm_error() -> None:
+def test_falls_back_to_safe_default_on_llm_error(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        router_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
     state = _state(research_findings=[_FINDING])
 
     result = decide_next_step(state, _BrokenLLM())  # type: ignore[arg-type]
 
     assert result == "analytics"
+    assert len(calls) == 1
+    assert calls[0]["reason"].startswith("exception:")
 
 
 def test_forces_progress_once_the_visit_cap_is_reached() -> None:

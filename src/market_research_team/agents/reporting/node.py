@@ -9,7 +9,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from market_research_team.agents.reporting.mcp_client import load_reporting_tools
+from market_research_team.caching.response_cache import put_cached_response
+from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
+from market_research_team.security import audit
 from market_research_team.security.output_filters import (
     apply_output_guardrails,
     warnings_from_events,
@@ -113,14 +116,19 @@ def draft_report(
             [
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=human_content),
-            ]
+            ],
+            config={"tags": ["reporting_draft"]},
         )
         content = response.content
         if isinstance(content, str) and content.strip():
             return content
-    except Exception:
-        pass
+        reason = "empty_result"
+    except Exception as exc:
+        reason = f"exception: {exc}"
 
+    audit.record(
+        "fallback_triggered", audit.current_thread_id(), component="reporting_draft", reason=reason
+    )
     return _fallback_report(objective, findings, results)
 
 
@@ -178,6 +186,7 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
     objective = state["objective"]
     findings = state.get("research_findings", [])
     results = state.get("analytics_results", [])
+    put_cached_response(objective, findings, results, settings.vectorstore_dir)
     llm = get_chat_model()
     filename = f"{_slugify(objective)}.md"
 

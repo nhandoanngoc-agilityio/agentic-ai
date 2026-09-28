@@ -66,7 +66,7 @@ class _FakeStructuredRouteLLM:
         self._schema = schema
         return self
 
-    def invoke(self, messages: list[Any]) -> Any:
+    def invoke(self, messages: list[Any], config: Any = None) -> Any:
         context = str(messages[-1].content)
         allowed_line = next(
             line for line in context.splitlines() if line.startswith("Allowed next steps:")

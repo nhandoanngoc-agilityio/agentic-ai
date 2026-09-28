@@ -5,11 +5,13 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 
+from market_research_team.caching.memo import cached_cross_encoder
+from market_research_team.caching.rerank_cache import rerank_cached
+from market_research_team.caching.retrieval_cache import retrieve_for_queries_cached
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
 from market_research_team.retrieval.query_rewriter import rewrite_and_expand
-from market_research_team.retrieval.reranker import load_cross_encoder, rerank
-from market_research_team.retrieval.retriever import load_vectorstore, retrieve_for_queries
+from market_research_team.retrieval.retriever import load_vectorstore
 from market_research_team.security.patterns import INJECTION_PATTERNS, find_matches
 from market_research_team.state import AgentState, GuardrailEvent, ResearchFinding
 
@@ -63,15 +65,23 @@ def run_research_pipeline(
         persist_dir=settings.vectorstore_dir,
         embedding_model_name=settings.embedding_model_name,
     )
-    candidates = retrieve_for_queries(vectorstore, queries, k=_RETRIEVAL_K_PER_QUERY)
+    candidates = retrieve_for_queries_cached(
+        vectorstore,
+        queries,
+        k=_RETRIEVAL_K_PER_QUERY,
+        embedding_model_name=settings.embedding_model_name,
+        persist_dir=settings.vectorstore_dir,
+    )
 
-    cross_encoder = load_cross_encoder(settings.reranker_model_name)
-    reranked = rerank(
+    cross_encoder = cached_cross_encoder(settings.reranker_model_name)
+    reranked = rerank_cached(
         objective,
         candidates,
         cross_encoder,
         top_n=_RERANK_TOP_N,
         score_floor=settings.rerank_score_floor,
+        reranker_model_name=settings.reranker_model_name,
+        persist_dir=settings.vectorstore_dir,
     )
     reranked, events = filter_injected_chunks(reranked)
 

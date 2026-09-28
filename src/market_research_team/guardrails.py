@@ -6,12 +6,14 @@ node's own code needing to know about it.
 """
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphBubbleUp
 
+from market_research_team.security import audit
 from market_research_team.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -43,16 +45,20 @@ def with_error_boundary(
     """
 
     def _wrapped(state: AgentState) -> dict[str, Any]:
+        start = time.perf_counter()
         try:
-            return node_fn(state)
+            result = node_fn(state)
         except GraphBubbleUp:
             # LangGraph's own control flow (interrupt(), Send, etc.) is
             # implemented as an exception that must reach the runtime
             # unchanged -- a bare `except Exception` below would otherwise
             # swallow a human-in-the-loop interrupt and mistake it for a
-            # node crash.
+            # node crash. Still timed and recorded (as "interrupted") since
+            # real work (e.g. drafting) ran before the pause.
+            _record_node_latency(node_name, start, "interrupted")
             raise
         except Exception as exc:
+            _record_node_latency(node_name, start, "error")
             logger.exception("Node %r failed", node_name)
             update: dict[str, Any] = {
                 "error": f"{node_name} failed: {exc}",
@@ -61,5 +67,19 @@ def with_error_boundary(
             if fallback_updates:
                 update.update(fallback_updates)
             return update
+        else:
+            _record_node_latency(node_name, start, "ok")
+            return result
 
     return _wrapped
+
+
+def _record_node_latency(node_name: str, start: float, outcome: str) -> None:
+    duration_ms = (time.perf_counter() - start) * 1000
+    audit.record(
+        "node_latency",
+        audit.current_thread_id(),
+        node=node_name,
+        duration_ms=duration_ms,
+        outcome=outcome,
+    )

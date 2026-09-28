@@ -6,6 +6,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from market_research_team import graph as graph_module
 from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.research import node as research_node_module
@@ -97,3 +98,21 @@ def test_run_graph_catches_graph_recursion_error_and_returns_error_state() -> No
 
     assert result.get("error") is not None
     assert "Recursion limit reached" in result["error"]
+
+
+def test_run_graph_records_run_latency_on_recursion_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        graph_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
+    run_graph(_initial_state(), recursion_limit=2)
+
+    run_calls = [c for c in calls if c["event"] == "run_latency"]
+    assert len(run_calls) == 1
+    assert run_calls[0]["outcome"] == "recursion_limit"
+    assert run_calls[0]["duration_ms"] >= 0
