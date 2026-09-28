@@ -7,6 +7,10 @@ short-circuits `research`/`analytics`. `reporting_node`'s draft, output
 guardrails, and human-approval `interrupt()` always run fresh and are never
 skipped -- a cache hit changes what feeds into the report, never whether a
 human reviews it.
+
+Safe-caching rules applied here: objectives containing PII or secrets are
+never cached or looked up, and runs that were degraded or flagged (empty
+findings/results, any guardrail event) are never written.
 """
 
 import time
@@ -16,22 +20,27 @@ from market_research_team.caching import stats, store
 from market_research_team.caching.keys import response_key
 from market_research_team.config import settings
 from market_research_team.observability import record_cache_event
-from market_research_team.state import AnalyticsResult, ResearchFinding
+from market_research_team.security.patterns import PII_PATTERNS, SECRET_PATTERNS, find_matches
+from market_research_team.state import AnalyticsResult, GuardrailEvent, ResearchFinding
 
 _LAYER = "response"
+
+
+def _is_sensitive(objective: str) -> bool:
+    return bool(find_matches(objective, PII_PATTERNS) or find_matches(objective, SECRET_PATTERNS))
 
 
 def get_cached_response(
     objective: str, persist_dir: Path
 ) -> tuple[list[ResearchFinding], list[AnalyticsResult]] | None:
-    if not settings.response_cache_enabled:
+    if not settings.response_cache_enabled or _is_sensitive(objective):
         return None
 
     key_hash = response_key(objective)
     start = time.perf_counter()
     try:
         conn = store.get_connection(settings.cache_db_path)
-        version = store.current_vectorstore_version(persist_dir)
+        version = store.cache_version(persist_dir)
         payload = store.get(conn, layer=_LAYER, key_hash=key_hash, version=version)
     except Exception:
         payload = None
@@ -50,14 +59,18 @@ def put_cached_response(
     findings: list[ResearchFinding],
     results: list[AnalyticsResult],
     persist_dir: Path,
+    *,
+    guardrail_events: list[GuardrailEvent] | None = None,
 ) -> None:
-    if not settings.response_cache_enabled:
+    if not settings.response_cache_enabled or _is_sensitive(objective):
+        return
+    if not findings or not results or guardrail_events:
         return
 
     key_hash = response_key(objective)
     try:
         conn = store.get_connection(settings.cache_db_path)
-        version = store.current_vectorstore_version(persist_dir)
+        version = store.cache_version(persist_dir)
         store.put(
             conn,
             layer=_LAYER,
