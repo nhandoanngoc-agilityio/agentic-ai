@@ -1,5 +1,6 @@
 """Top-level graph assembly."""
 
+import time
 from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -12,11 +13,14 @@ from market_research_team.agents.analytics.node import analytics_node
 from market_research_team.agents.reporting.node import reporting_node
 from market_research_team.agents.research.node import research_node
 from market_research_team.agents.supervisor.router import route_from_supervisor, supervisor_node
+from market_research_team.caching.response_cache import get_cached_response
 from market_research_team.config import settings
 from market_research_team.guardrails import with_error_boundary
 from market_research_team.observability import flush as flush_traces
 from market_research_team.observability import get_langfuse_handler, tracing_enabled
+from market_research_team.security import audit
 from market_research_team.security.input_guard import input_guard_node
+from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
 
 
@@ -75,6 +79,37 @@ def build_production_graph(checkpointer: BaseCheckpointSaver[Any]):
     return _build_graph(checkpointer=checkpointer)
 
 
+def _apply_response_cache(initial_state: AgentState | Command[Any]) -> AgentState | Command[Any]:
+    """On a fresh (non-resume) run, check the opt-in response cache for an
+    exact match on the validated objective. A hit populates
+    `research_findings`/`analytics_results` and sets `from_response_cache`
+    so `decide_next_step` skips straight to Reporting -- see
+    `caching/response_cache.py`. Never raises: a bad objective here is left
+    for `input_guard_node` to reject normally.
+    """
+
+    if not settings.response_cache_enabled or not isinstance(initial_state, dict):
+        return initial_state
+
+    try:
+        objective = validate_objective(initial_state["objective"])
+    except Exception:
+        return initial_state
+
+    cached = get_cached_response(objective, settings.vectorstore_dir)
+    if cached is None:
+        return initial_state
+
+    findings, results = cached
+    return {
+        **initial_state,
+        "objective": objective,
+        "research_findings": findings,
+        "analytics_results": results,
+        "from_response_cache": True,
+    }
+
+
 def run_graph(
     initial_state: AgentState | Command[Any],
     *,
@@ -95,6 +130,7 @@ def run_graph(
     again rather than reaching `FINISH`.
     """
 
+    initial_state = _apply_response_cache(initial_state)
     target_graph = compiled_graph if compiled_graph is not None else graph
     config: RunnableConfig = {"recursion_limit": recursion_limit or settings.recursion_limit}
     if thread_id is not None:
@@ -102,11 +138,12 @@ def run_graph(
     if tracing_enabled():
         config["callbacks"] = [get_langfuse_handler()]
 
+    objective = initial_state.get("objective") if isinstance(initial_state, dict) else None
+    start = time.perf_counter()
     try:
         if tracing_enabled():
             from langfuse import propagate_attributes
 
-            objective = initial_state.get("objective") if isinstance(initial_state, dict) else None
             with propagate_attributes(
                 trace_name="market-research-run",
                 session_id=thread_id,
@@ -120,7 +157,23 @@ def run_graph(
         else:
             result = target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
     except GraphRecursionError as exc:
+        _record_run_latency(thread_id, objective, start, "recursion_limit")
         return {**initial_state, "error": f"Recursion limit reached: {exc}"}
+    except Exception:
+        _record_run_latency(thread_id, objective, start, "exception")
+        raise
     finally:
         flush_traces()
+
+    outcome = "interrupted" if result.get("__interrupt__") else "finished"
+    _record_run_latency(thread_id, objective, start, outcome)
     return cast(AgentState, result)
+
+
+def _record_run_latency(
+    thread_id: str | None, objective: str | None, start: float, outcome: str
+) -> None:
+    duration_ms = (time.perf_counter() - start) * 1000
+    audit.record(
+        "run_latency", thread_id, objective=objective, duration_ms=duration_ms, outcome=outcome
+    )

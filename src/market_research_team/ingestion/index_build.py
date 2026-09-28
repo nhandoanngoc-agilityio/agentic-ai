@@ -1,6 +1,7 @@
 """Embed leaf chunks into the vector store; persist section chunks as a parent docstore."""
 
 import json
+import uuid
 from pathlib import Path
 
 from langchain_chroma import Chroma
@@ -35,13 +36,17 @@ def build_vectorstore(
 
     embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
     persist_dir.mkdir(parents=True, exist_ok=True)
-    return Chroma.from_documents(
+    vectorstore = Chroma.from_documents(
         documents=documents,
         embedding=embeddings,
         ids=ids,
         collection_name=collection_name,
         persist_directory=str(persist_dir),
     )
+    # Stamps a fresh version so caching/retrieval_cache.py and rerank_cache.py
+    # invalidate all entries keyed against the previous index on next read.
+    (persist_dir / ".cache_version").write_text(str(uuid.uuid4()), encoding="utf-8")
+    return vectorstore
 
 
 def persist_parent_store(chunks: list[HierarchicalChunk], *, path: Path) -> None:

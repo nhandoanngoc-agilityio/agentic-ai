@@ -22,6 +22,14 @@ class QueryRewriteCase:
 
 
 @dataclass
+class RetrievalCase:
+    name: str
+    objective: str
+    expected_sources: list[str] = field(default_factory=list)
+    min_hits: int = 1
+
+
+@dataclass
 class SupervisorDecisionCase:
     name: str
     research_findings: list[ResearchFinding]
@@ -68,6 +76,21 @@ QUERY_REWRITE_CASES: list[QueryRewriteCase] = [
         name="market_size_growth",
         objective="What is the overall BI market size and growth rate?",
         required_any_keywords=["market size", "growth", "cagr", "market"],
+    ),
+]
+
+RETRIEVAL_CASES: list[RetrievalCase] = [
+    RetrievalCase(
+        name="acme_pricing_retrieval",
+        objective="What is Acme's pricing model?",
+        expected_sources=["competitor_acme.md"],
+        min_hits=1,
+    ),
+    RetrievalCase(
+        name="globex_security_retrieval",
+        objective="What security capabilities does Globex offer?",
+        expected_sources=["competitor_globex.md"],
+        min_hits=1,
     ),
 ]
 

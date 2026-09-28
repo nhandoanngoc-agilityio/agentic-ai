@@ -1,6 +1,7 @@
-from gradio_app.app import resolve_interrupt, submit_objective
+from gradio_app.app import record_satisfaction_rating, resolve_interrupt, submit_objective
 from langgraph.types import Command
 
+from market_research_team.security import audit
 from market_research_team.state import AgentState
 
 
@@ -30,14 +31,16 @@ def test_submit_objective_renders_finished_run_without_interrupt() -> None:
     }
     graph = _FakeCompiledGraph(fake_result)
 
-    history, thread_id, pending_interrupt, figure, approval_visible = submit_objective(
-        "Compare Acme vs Globex pricing", [], None, graph
+    history, thread_id, pending_interrupt, figure, approval_visible, ran_objective, concluded = (
+        submit_objective("Compare Acme vs Globex pricing", [], None, graph)
     )
 
     assert thread_id  # a thread id was generated
     assert pending_interrupt is None
     assert approval_visible is False
     assert figure is not None
+    assert ran_objective == "Compare Acme vs Globex pricing"
+    assert concluded is True
     assert any("report.md" in str(turn.get("content", "")) for turn in history)
 
 
@@ -69,8 +72,8 @@ def test_submit_objective_surfaces_pending_interrupt() -> None:
     }
     graph = _FakeCompiledGraph(fake_result)
 
-    history, thread_id, pending_interrupt, figure, approval_visible = submit_objective(
-        "Compare Acme vs Globex pricing", [], None, graph
+    history, thread_id, pending_interrupt, figure, approval_visible, ran_objective, concluded = (
+        submit_objective("Compare Acme vs Globex pricing", [], None, graph)
     )
 
     assert pending_interrupt == {
@@ -82,6 +85,7 @@ def test_submit_objective_surfaces_pending_interrupt() -> None:
         "warnings": [],
     }
     assert approval_visible is True
+    assert concluded is False
     assert any("draft" in str(turn.get("content", "")) for turn in history)
 
 
@@ -113,7 +117,7 @@ def test_submit_objective_surfaces_guardrail_warnings_and_round_info() -> None:
     }
     graph = _FakeCompiledGraph(fake_result)
 
-    history, _thread_id, _pending, _figure, _visible = submit_objective(
+    history, _thread_id, _pending, _figure, _visible, _ran_objective, _concluded = submit_objective(
         "Compare Acme vs Globex pricing", [], None, graph
     )
 
@@ -158,13 +162,14 @@ class _RaisingGraph:
 def test_submit_objective_renders_invalid_objective_as_error_turn() -> None:
     graph = _FakeCompiledGraph({})  # never invoked; validation fails first
 
-    history, thread_id, pending_interrupt, figure, approval_visible = submit_objective(
-        "", [], None, graph
+    history, thread_id, pending_interrupt, figure, approval_visible, ran_objective, concluded = (
+        submit_objective("", [], None, graph)
     )
 
     assert pending_interrupt is None
     assert figure is None
     assert approval_visible is False
+    assert concluded is True
     assert any("Run failed" in str(turn.get("content", "")) for turn in history)
     # The invalid input itself must still be visible above the error, so the
     # transcript explains what triggered the failure.
@@ -174,13 +179,14 @@ def test_submit_objective_renders_invalid_objective_as_error_turn() -> None:
 def test_submit_objective_renders_run_graph_exception_as_error_turn() -> None:
     graph = _RaisingGraph()
 
-    history, thread_id, pending_interrupt, figure, approval_visible = submit_objective(
-        "Compare Acme vs Globex pricing", [], None, graph
+    history, thread_id, pending_interrupt, figure, approval_visible, ran_objective, concluded = (
+        submit_objective("Compare Acme vs Globex pricing", [], None, graph)
     )
 
     assert pending_interrupt is None
     assert figure is None
     assert approval_visible is False
+    assert concluded is True
     assert any("Run failed" in str(turn.get("content", "")) for turn in history)
 
 
@@ -210,7 +216,7 @@ def test_resolve_interrupt_resumes_with_a_command() -> None:
     }
     graph = _ResumeCapturingGraph(fake_result)
 
-    history, pending_interrupt, figure, approval_visible = resolve_interrupt(
+    history, pending_interrupt, figure, approval_visible, concluded = resolve_interrupt(
         {"approved": True}, [], "thread-1", graph
     )
 
@@ -218,6 +224,7 @@ def test_resolve_interrupt_resumes_with_a_command() -> None:
     assert graph.last_invoke_arg.resume == {"approved": True}
     assert pending_interrupt is None
     assert approval_visible is False
+    assert concluded is True
     assert any("report.md" in str(turn.get("content", "")) for turn in history)
 
 
@@ -249,22 +256,35 @@ def test_resolve_interrupt_surfaces_a_second_round_interrupt() -> None:
     }
     graph = _ResumeCapturingGraph(fake_result)
 
-    history, pending_interrupt, figure, approval_visible = resolve_interrupt(
+    history, pending_interrupt, figure, approval_visible, concluded = resolve_interrupt(
         {"approved": False, "feedback": "add pricing detail"}, [], "thread-1", graph
     )
 
     assert pending_interrupt["attempt"] == 2
     assert approval_visible is True
+    assert concluded is False
 
 
 def test_resolve_interrupt_renders_run_graph_exception_as_error_turn() -> None:
     graph = _RaisingGraph()
 
-    history, pending_interrupt, figure, approval_visible = resolve_interrupt(
+    history, pending_interrupt, figure, approval_visible, concluded = resolve_interrupt(
         {"approved": True}, [], "thread-1", graph
     )
 
     assert pending_interrupt is None
     assert figure is None
     assert approval_visible is False
+    assert concluded is True
     assert any("Run failed" in str(turn.get("content", "")) for turn in history)
+
+
+def test_record_satisfaction_rating_writes_to_audit_log(tmp_path, monkeypatch) -> None:
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_log_path", log)
+
+    record_satisfaction_rating("thread-1", "Compare Acme vs Globex pricing", "up")
+
+    rate, count = audit.satisfaction_rate(log)
+    assert count == 1
+    assert rate == 1.0

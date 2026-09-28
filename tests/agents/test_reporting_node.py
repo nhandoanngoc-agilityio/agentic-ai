@@ -2,6 +2,7 @@
 
 from langchain_core.messages import AIMessage
 
+from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.reporting.node import _extract_tool_text, _slugify, draft_report
 
 _FINDING = {
@@ -17,13 +18,13 @@ class _FakeLLM:
         self._content = content
         self.last_messages: list[object] | None = None
 
-    def invoke(self, messages: list[object]) -> AIMessage:
+    def invoke(self, messages: list[object], config: object = None) -> AIMessage:
         self.last_messages = messages
         return AIMessage(content=self._content)
 
 
 class _BrokenLLM:
-    def invoke(self, _messages: list[object]) -> AIMessage:
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
         raise RuntimeError("boom")
 
 
@@ -38,19 +39,38 @@ def test_draft_report_uses_llm_output_when_available() -> None:
     assert result == "# Custom Report"
 
 
-def test_draft_report_falls_back_on_llm_error() -> None:
+def test_draft_report_falls_back_on_llm_error(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        reporting_node_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
     result = draft_report("Assess pricing", [_FINDING], [_RESULT], _BrokenLLM())  # type: ignore[arg-type]
 
     assert "# Research Report" in result
     assert "Assess pricing" in result
     assert "Acme prices at $49/seat." in result
     assert "mean: 49.0" in result
+    assert len(calls) == 1
+    assert calls[0]["component"] == "reporting_draft"
+    assert calls[0]["reason"].startswith("exception:")
 
 
-def test_draft_report_falls_back_on_blank_llm_output() -> None:
+def test_draft_report_falls_back_on_blank_llm_output(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        reporting_node_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
     result = draft_report("Assess pricing", [_FINDING], [_RESULT], _FakeLLM("   "))  # type: ignore[arg-type]
 
     assert "# Research Report" in result
+    assert len(calls) == 1
+    assert calls[0]["reason"] == "empty_result"
 
 
 def test_draft_report_folds_reviewer_feedback_into_the_prompt() -> None:

@@ -6,7 +6,7 @@ unit-testable without needing real LLM calls — only the eval cases that
 call these need real credentials.
 """
 
-from market_research_team.state import AnalyticsResult
+from market_research_team.state import AnalyticsResult, ResearchFinding
 
 
 def check_query_count(queries: list[str], *, min_count: int, max_count: int) -> tuple[bool, str]:
@@ -40,6 +40,31 @@ def check_contains_all(text: str, required_substrings: list[str]) -> tuple[bool,
 def check_min_length(items: list, minimum: int, label: str) -> tuple[bool, str]:
     passed = len(items) >= minimum
     return passed, f"{label} count={len(items)} (expected >= {minimum})"
+
+
+def check_source_coverage(
+    findings: list[ResearchFinding], expected_sources: list[str], min_hits: int
+) -> tuple[bool, str]:
+    """Passes if at least `min_hits` of `expected_sources` appear among the
+    retrieved/reranked findings' `source` field.
+
+    Catches a retrieval/reranking regression that a query-count or keyword
+    check on the rewritten queries alone would miss: the right queries were
+    generated, but the wrong (or no) chunks made it through retrieval and
+    reranking.
+    """
+
+    if not expected_sources:
+        return True, "no sources required"
+
+    retrieved_sources = {finding["source"] for finding in findings}
+    hits = [source for source in expected_sources if source in retrieved_sources]
+    passed = len(hits) >= min_hits
+    detail = (
+        f"matched sources: {hits or 'none'} (expected >= {min_hits} of {expected_sources}; "
+        f"retrieved: {sorted(retrieved_sources)})"
+    )
+    return passed, detail
 
 
 def check_any_value_matches(

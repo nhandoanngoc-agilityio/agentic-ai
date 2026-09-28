@@ -1,5 +1,6 @@
 """Analytics Agent node: LLM tool-calling over native Python math/stat tools."""
 
+import time
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -8,9 +9,21 @@ from langchain_core.tools import BaseTool
 
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.llm import get_chat_model
+from market_research_team.security import audit
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
 
 _MAX_TOOL_ITERATIONS = 4
+
+
+def _record_tool_call(tool_name: str, duration_ms: float, outcome: str) -> None:
+    audit.record(
+        "tool_call",
+        audit.current_thread_id(),
+        tool=tool_name,
+        duration_ms=duration_ms,
+        outcome=outcome,
+    )
+
 
 _SYSTEM_PROMPT = (
     "You are the Analytics Agent for a market and competitor research team. "
@@ -68,7 +81,7 @@ def run_tool_calling_loop(
 
     results: list[AnalyticsResult] = []
     for _ in range(max_iterations):
-        ai_message = llm_with_tools.invoke(messages)
+        ai_message = llm_with_tools.invoke(messages, config={"tags": ["analytics"]})
         messages.append(ai_message)
 
         tool_calls = getattr(ai_message, "tool_calls", None) or []
@@ -81,16 +94,20 @@ def run_tool_calling_loop(
             tool = tools_by_name.get(tool_name)
 
             if tool is None:
+                _record_tool_call(tool_name, 0.0, "unknown_tool")
                 messages.append(
                     ToolMessage(content=f"Unknown tool: {tool_name}", tool_call_id=tool_call["id"])
                 )
                 continue
 
+            start = time.perf_counter()
             try:
                 output = tool.invoke(tool_args)
             except Exception as exc:
+                _record_tool_call(tool_name, (time.perf_counter() - start) * 1000, "error")
                 messages.append(ToolMessage(content=f"Error: {exc}", tool_call_id=tool_call["id"]))
                 continue
+            _record_tool_call(tool_name, (time.perf_counter() - start) * 1000, "ok")
 
             results.append(
                 {

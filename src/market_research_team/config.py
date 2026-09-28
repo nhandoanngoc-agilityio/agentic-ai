@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     checkpoint_db_path: Path = _PROJECT_ROOT / "data" / "checkpoints.sqlite"
     database_url: str | None = None
 
+    # Embedding/retrieval caching (see caching/). Invalidated automatically on
+    # vectorstore reseed via a version stamp; TTLs bound staleness otherwise.
+    cache_enabled: bool = True
+    cache_db_path: Path = _PROJECT_ROOT / "data" / "cache.sqlite"
+    embedding_cache_ttl_seconds: int = 7 * 24 * 3600
+    retrieval_cache_ttl_seconds: int = 24 * 3600
+
+    # Full-pipeline response cache (research_findings + analytics_results for
+    # an exact repeated objective). Off by default: market research content
+    # is time-sensitive, so this is opt-in rather than on-by-default like the
+    # other caches. Reporting/approval is never skipped -- see
+    # caching/response_cache.py.
+    response_cache_enabled: bool = False
+    response_cache_ttl_seconds: int = 24 * 3600
+
     # Langfuse tracing (see observability.py). Optional: tracing is a no-op
     # unless both keys are set, so hermetic tests and unconfigured local runs
     # never touch the network.

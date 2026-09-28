@@ -1,3 +1,4 @@
+from market_research_team.retrieval import query_rewriter as query_rewriter_module
 from market_research_team.retrieval.query_rewriter import rewrite_and_expand
 
 
@@ -10,7 +11,7 @@ class _FakeStructuredLLM:
     def __init__(self, result: _FakeQueryExpansion) -> None:
         self._result = result
 
-    def invoke(self, _messages: list[object]) -> _FakeQueryExpansion:
+    def invoke(self, _messages: list[object], config: object = None) -> _FakeQueryExpansion:
         return self._result
 
 
@@ -35,25 +36,43 @@ def test_rewrite_and_expand_returns_cleaned_llm_queries() -> None:
     assert queries == ["acme pricing", "acme security"]
 
 
-def test_rewrite_and_expand_falls_back_to_objective_on_llm_error() -> None:
+def test_rewrite_and_expand_falls_back_to_objective_on_llm_error(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        query_rewriter_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
     queries = rewrite_and_expand("Assess competitor pricing strategy", _BrokenLLM())  # type: ignore[arg-type]
 
     assert queries == ["Assess competitor pricing strategy"]
+    assert len(calls) == 1
+    assert calls[0]["component"] == "query_rewriter"
+    assert calls[0]["reason"].startswith("exception:")
 
 
-def test_rewrite_and_expand_falls_back_when_llm_returns_no_usable_queries() -> None:
+def test_rewrite_and_expand_falls_back_when_llm_returns_no_usable_queries(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        query_rewriter_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
     llm = _FakeLLM(_FakeQueryExpansion(["   ", ""]))
 
     queries = rewrite_and_expand("Assess competitor pricing strategy", llm)  # type: ignore[arg-type]
 
     assert queries == ["Assess competitor pricing strategy"]
+    assert len(calls) == 1
+    assert calls[0]["reason"] == "empty_result"
 
 
 def test_rewrite_and_expand_wraps_objective_in_delimiter_tags() -> None:
     captured: dict[str, list[object]] = {}
 
     class _CapturingStructuredLLM:
-        def invoke(self, messages: list[object]) -> _FakeQueryExpansion:
+        def invoke(self, messages: list[object], config: object = None) -> _FakeQueryExpansion:
             captured["messages"] = messages
             return _FakeQueryExpansion(["acme pricing"])
 

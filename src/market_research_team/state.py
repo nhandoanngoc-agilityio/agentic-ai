@@ -59,3 +59,9 @@ class AgentState(TypedDict):
     # Append-only: every node that blocks, drops, redacts or flags something
     # adds an event here. Read by the audit record at FINISH and by the CLI.
     guardrail_events: NotRequired[Annotated[list[GuardrailEvent], operator.add]]
+    # Set by `run_graph` when `research_findings`/`analytics_results` were
+    # populated from the response cache (see caching/response_cache.py)
+    # rather than computed fresh. `decide_next_step` uses this to skip
+    # straight to `reporting` -- drafting and human approval still always
+    # run fresh regardless of this flag.
+    from_response_cache: NotRequired[bool]

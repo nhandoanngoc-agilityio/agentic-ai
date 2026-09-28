@@ -16,6 +16,7 @@ from matplotlib.figure import Figure
 from gradio_app.charts import build_comparison_figure
 from market_research_team.config import settings
 from market_research_team.graph import run_graph
+from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
 
@@ -69,12 +70,15 @@ def submit_objective(
     history: list[dict[str, Any]],
     thread_id: str | None,
     compiled_graph: Any,
-) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None, Figure | None, bool]:
+) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None, Figure | None, bool, str, bool]:
     """Run the graph for a fresh objective and render the outcome.
 
-    Returns `(new_history, thread_id, pending_interrupt, chart_figure, approval_row_visible)`.
-    `pending_interrupt` is the raw `interrupt()` payload from
-    `reporting_node` when the run paused for approval, else `None`.
+    Returns `(new_history, thread_id, pending_interrupt, chart_figure,
+    approval_row_visible, objective, run_concluded)`. `pending_interrupt` is
+    the raw `interrupt()` payload from `reporting_node` when the run paused
+    for approval, else `None`. `run_concluded` is true whenever the run
+    reached an end state (success, discard, or error) rather than pausing
+    for approval -- used to show the satisfaction rating row.
     """
 
     # Every call to `submit_objective` starts a brand-new run: always mint a
@@ -91,7 +95,7 @@ def submit_objective(
         objective = validate_objective(objective)
     except Exception as exc:
         new_history.append({"role": "assistant", "content": f"**Run failed:** {exc}"})
-        return new_history, thread_id, None, None, False
+        return new_history, thread_id, None, None, False, objective, True
 
     try:
         result = run_graph(
@@ -101,7 +105,7 @@ def submit_objective(
         )
     except Exception as exc:
         new_history.append({"role": "assistant", "content": f"**Run failed:** {exc}"})
-        return new_history, thread_id, None, None, False
+        return new_history, thread_id, None, None, False, objective, True
 
     interrupts = result.get("__interrupt__")
     if interrupts:
@@ -109,11 +113,11 @@ def submit_objective(
         new_history.append(
             {"role": "assistant", "content": _render_interrupt_turn(pending_interrupt)}
         )
-        return new_history, thread_id, pending_interrupt, None, True
+        return new_history, thread_id, pending_interrupt, None, True, objective, False
 
     new_history.append({"role": "assistant", "content": _render_result_turn(result)})
     figure = build_comparison_figure(result.get("analytics_results", []))
-    return new_history, thread_id, None, figure, False
+    return new_history, thread_id, None, figure, False, objective, True
 
 
 def resolve_interrupt(
@@ -121,12 +125,13 @@ def resolve_interrupt(
     history: list[dict[str, Any]],
     thread_id: str,
     compiled_graph: Any,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None, Figure | None, bool]:
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, Figure | None, bool, bool]:
     """Resume a paused run with a human approval/rejection decision.
 
     `decision` matches the shape `reporting_node`'s `interrupt()` expects:
     `{"approved": True}`, `{"approved": False, "feedback": "..."}`, or
-    `{"discard": True}`.
+    `{"discard": True}`. `run_concluded` (see `submit_objective`) is the
+    last element.
     """
 
     new_history = [*history, {"role": "user", "content": f"Decision: {decision}"}]
@@ -139,7 +144,7 @@ def resolve_interrupt(
         )
     except Exception as exc:
         new_history.append({"role": "assistant", "content": f"**Run failed:** {exc}"})
-        return new_history, None, None, False
+        return new_history, None, None, False, True
 
     interrupts = result.get("__interrupt__")
     if interrupts:
@@ -147,11 +152,22 @@ def resolve_interrupt(
         new_history.append(
             {"role": "assistant", "content": _render_interrupt_turn(pending_interrupt)}
         )
-        return new_history, pending_interrupt, None, True
+        return new_history, pending_interrupt, None, True, False
 
     new_history.append({"role": "assistant", "content": _render_result_turn(result)})
     figure = build_comparison_figure(result.get("analytics_results", []))
-    return new_history, None, figure, False
+    return new_history, None, figure, False, True
+
+
+def record_satisfaction_rating(thread_id: str | None, objective: str, rating: str) -> None:
+    """Persist a thumbs up/down rating for the just-concluded run.
+
+    Reuses the existing append-only audit log (`security.audit`) rather
+    than a new store -- `audit.record` already never raises and scrubs
+    secrets, so a UI click can call this without its own error handling.
+    """
+
+    audit.record("user_satisfaction", thread_id, objective=objective, rating=rating)
 
 
 def list_report_files() -> list[str]:
@@ -213,6 +229,11 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
                     feedback_box = gr.Textbox(label="Feedback (for reject)", scale=3)
                     reject_button = gr.Button("Reject")
 
+                with gr.Row(visible=False) as rating_row:
+                    gr.Markdown("How was this run?")
+                    thumbs_up_button = gr.Button("\U0001f44d")
+                    thumbs_down_button = gr.Button("\U0001f44e")
+
             with gr.Tab("Reports") as reports_tab:
                 report_dropdown = gr.Dropdown(label="Report", choices=list_report_files())
                 report_preview = gr.Markdown()
@@ -235,42 +256,88 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
 
         thread_state = gr.State(None)
         interrupt_state = gr.State(None)
+        objective_state = gr.State("")
 
         def on_submit(objective: str, history: list[dict], thread_id: str | None):
-            new_history, new_thread_id, pending, figure, visible = submit_objective(
-                objective, history, thread_id, compiled_graph
+            new_history, new_thread_id, pending, figure, visible, ran_objective, concluded = (
+                submit_objective(objective, history, thread_id, compiled_graph)
             )
-            return new_history, new_thread_id, pending, figure, gr.update(visible=visible), ""
+            return (
+                new_history,
+                new_thread_id,
+                pending,
+                figure,
+                gr.update(visible=visible),
+                "",
+                ran_objective,
+                gr.update(visible=concluded),
+            )
 
         def on_approve(history: list[dict], thread_id: str, _pending: dict | None):
-            new_history, pending, figure, visible = resolve_interrupt(
+            new_history, pending, figure, visible, concluded = resolve_interrupt(
                 {"approved": True}, history, thread_id, compiled_graph
             )
-            return new_history, pending, figure, gr.update(visible=visible)
+            return (
+                new_history,
+                pending,
+                figure,
+                gr.update(visible=visible),
+                gr.update(visible=concluded),
+            )
 
         def on_reject(history: list[dict], thread_id: str, _pending: dict | None, feedback: str):
-            new_history, pending, figure, visible = resolve_interrupt(
+            new_history, pending, figure, visible, concluded = resolve_interrupt(
                 {"approved": False, "feedback": feedback or None},
                 history,
                 thread_id,
                 compiled_graph,
             )
-            return new_history, pending, figure, gr.update(visible=visible), ""
+            return (
+                new_history,
+                pending,
+                figure,
+                gr.update(visible=visible),
+                "",
+                gr.update(visible=concluded),
+            )
+
+        def on_rate(thread_id: str | None, objective: str, rating: str):
+            record_satisfaction_rating(thread_id, objective, rating)
+            return gr.update(visible=False)
 
         submit_button.click(
             on_submit,
             inputs=[objective_box, chatbot, thread_state],
-            outputs=[chatbot, thread_state, interrupt_state, chart, approval_row, objective_box],
+            outputs=[
+                chatbot,
+                thread_state,
+                interrupt_state,
+                chart,
+                approval_row,
+                objective_box,
+                objective_state,
+                rating_row,
+            ],
         )
         approve_button.click(
             on_approve,
             inputs=[chatbot, thread_state, interrupt_state],
-            outputs=[chatbot, interrupt_state, chart, approval_row],
+            outputs=[chatbot, interrupt_state, chart, approval_row, rating_row],
         )
         reject_button.click(
             on_reject,
             inputs=[chatbot, thread_state, interrupt_state, feedback_box],
-            outputs=[chatbot, interrupt_state, chart, approval_row, feedback_box],
+            outputs=[chatbot, interrupt_state, chart, approval_row, feedback_box, rating_row],
+        )
+        thumbs_up_button.click(
+            lambda thread_id, objective: on_rate(thread_id, objective, "up"),
+            inputs=[thread_state, objective_state],
+            outputs=[rating_row],
+        )
+        thumbs_down_button.click(
+            lambda thread_id, objective: on_rate(thread_id, objective, "down"),
+            inputs=[thread_state, objective_state],
+            outputs=[rating_row],
         )
 
     return demo

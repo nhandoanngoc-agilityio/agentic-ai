@@ -26,6 +26,7 @@ from market_research_team import graph as graph_module
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.reporting.node import draft_report
+from market_research_team.agents.research.node import run_research_pipeline
 from market_research_team.agents.supervisor.router import decide_next_step
 from market_research_team.config import settings
 from market_research_team.evaluation import checks
@@ -34,6 +35,7 @@ from market_research_team.evaluation.golden_dataset import (
     FULL_PIPELINE_CASES,
     QUERY_REWRITE_CASES,
     REPORTING_CASES,
+    RETRIEVAL_CASES,
     SUPERVISOR_DECISION_CASES,
 )
 from market_research_team.llm import get_chat_model
@@ -63,6 +65,27 @@ def evaluate_query_rewriter(llm: BaseChatModel, provider: str) -> list[EvalResul
         passed = count_passed and keyword_passed
         detail = f"queries={queries!r}; {count_detail}; {keyword_detail}"
         results.append(EvalResult("query_rewrite", case.name, passed, detail, provider))
+    return results
+
+
+def evaluate_retrieval(provider: str) -> list[EvalResult]:
+    """Runs the real research pipeline (query rewrite -> retrieve -> rerank)
+    against the seeded vector store and checks that the expected source
+    documents made it through -- catches a retrieval/reranking regression
+    that a query-rewrite check alone would miss. Needs a seeded vector
+    store, same prerequisite as `evaluate_full_pipeline`.
+
+    Uses `run_research_pipeline` directly (not the full graph) so this
+    stays cheaper than `evaluate_full_pipeline`, skipping analytics/reporting.
+    """
+
+    results = []
+    for case in RETRIEVAL_CASES:
+        findings, _query_count, _candidate_count, _events = run_research_pipeline(case.objective)
+        passed, detail = checks.check_source_coverage(
+            findings, case.expected_sources, case.min_hits
+        )
+        results.append(EvalResult("retrieval", case.name, passed, detail, provider))
     return results
 
 
@@ -160,6 +183,7 @@ def run_all(provider: Literal["anthropic", "openai"] | None = None) -> list[Eval
         llm = get_chat_model()
         results: list[EvalResult] = []
         results += evaluate_query_rewriter(llm, active_provider)
+        results += evaluate_retrieval(active_provider)
         results += evaluate_supervisor_decision(llm, active_provider)
         results += evaluate_analytics(llm, active_provider)
         results += evaluate_reporting(llm, active_provider)

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from langgraph.errors import GraphInterrupt
 
+from market_research_team import guardrails as guardrails_module
 from market_research_team.guardrails import with_error_boundary
 from market_research_team.state import AgentState
 
@@ -67,6 +68,71 @@ def test_with_error_boundary_reraises_graph_interrupt_instead_of_swallowing_it()
 
     with pytest.raises(GraphInterrupt):
         wrapped(_state())
+
+
+def test_with_error_boundary_records_node_latency_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        guardrails_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
+    def _node(_state: AgentState) -> dict[str, Any]:
+        return {}
+
+    wrapped = with_error_boundary("research", _node)
+    wrapped(_state())
+
+    assert len(calls) == 1
+    assert calls[0]["event"] == "node_latency"
+    assert calls[0]["node"] == "research"
+    assert calls[0]["outcome"] == "ok"
+    assert calls[0]["duration_ms"] >= 0
+
+
+def test_with_error_boundary_records_node_latency_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        guardrails_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
+    def _node(_state: AgentState) -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    wrapped = with_error_boundary("research", _node)
+    wrapped(_state())
+
+    assert len(calls) == 1
+    assert calls[0]["outcome"] == "error"
+
+
+def test_with_error_boundary_records_node_latency_on_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        guardrails_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
+    def _node(_state: AgentState) -> dict[str, Any]:
+        raise GraphInterrupt()
+
+    wrapped = with_error_boundary("reporting", _node)
+
+    with pytest.raises(GraphInterrupt):
+        wrapped(_state())
+
+    assert len(calls) == 1
+    assert calls[0]["outcome"] == "interrupted"
 
 
 def test_with_error_boundary_does_not_interfere_on_success_path() -> None:

@@ -1,5 +1,6 @@
 from langchain_core.messages import AIMessage
 
+from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import mean, percent_change
 
@@ -8,7 +9,7 @@ class _ScriptedBoundLLM:
     def __init__(self, responses: list[AIMessage]) -> None:
         self._responses = list(responses)
 
-    def invoke(self, _messages: list[object]) -> AIMessage:
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
         return self._responses.pop(0)
 
 
@@ -25,7 +26,7 @@ class _RepeatingBoundLLM:
         self._message = message
         self.call_count = 0
 
-    def invoke(self, _messages: list[object]) -> AIMessage:
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
         self.call_count += 1
         return self._message
 
@@ -55,6 +56,81 @@ def test_run_tool_calling_loop_records_successful_tool_calls_as_results() -> Non
     assert len(results) == 1
     assert results[0]["metric"] == "mean"
     assert results[0]["value"] == 4.0
+
+
+def test_run_tool_calling_loop_records_tool_call_telemetry_on_success(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        analytics_node_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "mean", "args": {"values": [2, 4, 6]}, "id": "call-1", "type": "tool_call"}
+        ],
+    )
+    final_message = AIMessage(content="Done.", tool_calls=[])
+    llm = _ScriptedLLM([tool_call_message, final_message])
+
+    run_tool_calling_loop(llm, [mean], "Compare pricing", [])  # type: ignore[arg-type]
+
+    tool_call_events = [c for c in calls if c["event"] == "tool_call"]
+    assert len(tool_call_events) == 1
+    assert tool_call_events[0]["tool"] == "mean"
+    assert tool_call_events[0]["outcome"] == "ok"
+    assert tool_call_events[0]["duration_ms"] >= 0
+
+
+def test_run_tool_calling_loop_records_tool_call_telemetry_on_error(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        analytics_node_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "percent_change",
+                "args": {"old_value": 0, "new_value": 10},
+                "id": "call-1",
+                "type": "tool_call",
+            }
+        ],
+    )
+    final_message = AIMessage(content="Done.", tool_calls=[])
+    llm = _ScriptedLLM([tool_call_message, final_message])
+
+    run_tool_calling_loop(llm, [percent_change], "Compare pricing", [])  # type: ignore[arg-type]
+
+    tool_call_events = [c for c in calls if c["event"] == "tool_call"]
+    assert len(tool_call_events) == 1
+    assert tool_call_events[0]["outcome"] == "error"
+
+
+def test_run_tool_calling_loop_records_tool_call_telemetry_for_unknown_tool(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        analytics_node_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[{"name": "made_up_tool", "args": {}, "id": "call-1", "type": "tool_call"}],
+    )
+    final_message = AIMessage(content="Done.", tool_calls=[])
+    llm = _ScriptedLLM([tool_call_message, final_message])
+
+    run_tool_calling_loop(llm, [mean], "Compare pricing", [])  # type: ignore[arg-type]
+
+    tool_call_events = [c for c in calls if c["event"] == "tool_call"]
+    assert len(tool_call_events) == 1
+    assert tool_call_events[0]["tool"] == "made_up_tool"
+    assert tool_call_events[0]["outcome"] == "unknown_tool"
 
 
 def test_run_tool_calling_loop_reports_tool_errors_without_crashing() -> None:
