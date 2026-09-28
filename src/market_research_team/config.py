@@ -36,17 +36,12 @@ class Settings(BaseSettings):
     checkpoint_db_path: Path = _PROJECT_ROOT / "data" / "checkpoints.sqlite"
     database_url: str | None = None
 
-    # Retrieval/rerank/response caching (see caching/). Invalidated automatically
-    # on vectorstore reseed via a version stamp; TTLs bound staleness otherwise.
+    # Embedding/retrieval caching (see caching/). Invalidated automatically on
+    # vectorstore reseed via a version stamp; TTLs bound staleness otherwise.
     cache_enabled: bool = True
     cache_db_path: Path = _PROJECT_ROOT / "data" / "cache.sqlite"
+    embedding_cache_ttl_seconds: int = 7 * 24 * 3600
     retrieval_cache_ttl_seconds: int = 24 * 3600
-    # Bump to invalidate every cache layer at once after a change the keys
-    # can't see on their own (e.g. a system prompt edit).
-    cache_policy_version: str = "1"
-    # Mixed into every cache key so tenants/environments sharing one cache
-    # file never read each other's entries.
-    cache_namespace: str = "default"
 
     # Full-pipeline response cache (research_findings + analytics_results for
     # an exact repeated objective). Off by default: market research content

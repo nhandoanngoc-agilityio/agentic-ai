@@ -186,13 +186,7 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
     objective = state["objective"]
     findings = state.get("research_findings", [])
     results = state.get("analytics_results", [])
-    put_cached_response(
-        objective,
-        findings,
-        results,
-        settings.vectorstore_dir,
-        guardrail_events=state.get("guardrail_events", []),
-    )
+    put_cached_response(objective, findings, results, settings.vectorstore_dir)
     llm = get_chat_model()
     filename = f"{_slugify(objective)}.md"
 

@@ -89,7 +89,7 @@ def test_reporting_node_populates_response_cache_when_enabled(
     monkeypatch.setattr(
         reporting_node_module,
         "put_cached_response",
-        lambda objective, findings, results, persist_dir, guardrail_events=None: calls.append(
+        lambda objective, findings, results, persist_dir: calls.append(
             (objective, findings, results, persist_dir)
         ),
     )

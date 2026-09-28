@@ -1,4 +1,4 @@
-"""SQLite-backed cache store shared by the retrieval, rerank, and response caches.
+"""SQLite-backed cache store shared by the retrieval and rerank caches.
 
 Mirrors `checkpointing/store.py`'s connection idiom, but deliberately does
 not cache the connection object at module scope: tests need to point at
@@ -11,8 +11,6 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-
-from market_research_team.config import settings
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache_entries (
@@ -48,7 +46,8 @@ def get(
     """Return the deserialized value on a live hit, else None.
 
     A row whose stored version no longer matches `version`, or whose TTL
-    has expired, is a miss -- and is opportunistically deleted.
+    has expired, is a miss -- and is opportunistically deleted so the table
+    doesn't grow unboundedly across repeated reseeds.
     """
 
     now = time.time() if now is None else now
@@ -80,14 +79,7 @@ def put(
     ttl_seconds: int,
     now: float | None = None,
 ) -> None:
-    """Upsert one entry, and purge every expired row in the same write.
-
-    `get` only deletes the exact key it reads, so without this sweep an
-    expired key that's never looked up again would sit in the file forever.
-    """
-
     now = time.time() if now is None else now
-    conn.execute("DELETE FROM cache_entries WHERE expires_at < ?", (now,))
     conn.execute(
         "INSERT OR REPLACE INTO cache_entries "
         "(layer, key_hash, version, value, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -107,11 +99,3 @@ def current_vectorstore_version(persist_dir: Path) -> str:
     if not marker.exists():
         return _UNSEEDED_VERSION
     return marker.read_text(encoding="utf-8").strip()
-
-
-def cache_version(persist_dir: Path) -> str:
-    """The version every cache layer stores and compares against: the data
-    version (vectorstore reseed) plus the manual `cache_policy_version`, so
-    either a data change or a policy bump invalidates all entries."""
-
-    return f"{current_vectorstore_version(persist_dir)}:{settings.cache_policy_version}"

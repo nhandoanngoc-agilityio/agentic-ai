@@ -42,7 +42,7 @@ def get_cached_retrieval(
     start = time.perf_counter()
     try:
         conn = store.get_connection(settings.cache_db_path)
-        version = store.cache_version(persist_dir)
+        version = store.current_vectorstore_version(persist_dir)
         payload = store.get(conn, layer=_LAYER, key_hash=key_hash, version=version)
     except Exception:
         payload = None
@@ -68,7 +68,7 @@ def put_cached_retrieval(
     key_hash = retrieval_key(queries, k=k, embedding_model_name=embedding_model_name)
     try:
         conn = store.get_connection(settings.cache_db_path)
-        version = store.cache_version(persist_dir)
+        version = store.current_vectorstore_version(persist_dir)
         store.put(
             conn,
             layer=_LAYER,
