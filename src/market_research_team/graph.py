@@ -22,6 +22,7 @@ from market_research_team.security import audit
 from market_research_team.security.input_guard import input_guard_node
 from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
+from market_research_team.versioning import trace_metadata
 
 
 def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
@@ -144,11 +145,15 @@ def run_graph(
         if tracing_enabled():
             from langfuse import propagate_attributes
 
+            version_metadata = trace_metadata()
+            if objective:
+                version_metadata["objective"] = objective
             with propagate_attributes(
                 trace_name="market-research-run",
                 session_id=thread_id,
+                version=version_metadata["agent_version"],
                 tags=["market-research-team"],
-                metadata={"objective": objective} if objective else None,
+                metadata=version_metadata,
             ):
                 # `compiled_graph: Any` (deliberate — see above) makes `target_graph`'s
                 # type partially unknown to the checker; the real object is always a

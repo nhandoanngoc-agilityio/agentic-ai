@@ -16,6 +16,7 @@ from typing import Any
 from langgraph.types import Command
 
 from market_research_team.checkpointing.store import get_checkpointer
+from market_research_team.feedback.retention import maybe_auto_prune
 from market_research_team.graph import build_production_graph, run_graph
 from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
@@ -69,13 +70,15 @@ def main() -> None:
         help="Override the default recursion limit for this run.",
     )
     args = parser.parse_args()
+    maybe_auto_prune()  # at most daily; see docs/security.md -> Retention
 
+    thread_id = args.thread_id or str(uuid.uuid4())
     try:
         objective = validate_objective(args.objective)
     except ValueError as exc:
+        if args.objective.strip():  # an empty objective is not an attempt worth harvesting
+            audit.record_input_rejection(thread_id, args.objective, exc)
         parser.error(str(exc))
-
-    thread_id = args.thread_id or str(uuid.uuid4())
     compiled_graph = build_production_graph(get_checkpointer())
 
     result = run_graph(

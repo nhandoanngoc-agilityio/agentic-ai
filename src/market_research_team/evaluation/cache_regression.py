@@ -13,11 +13,15 @@ Makes real LLM calls like the rest of the eval suite -- run on demand, not
 as part of the hermetic pytest suite.
 """
 
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
+from pathlib import Path
+
+from langchain_core.language_models import BaseChatModel
 
 from market_research_team.caching import stats
 from market_research_team.config import settings
-from market_research_team.evaluation.offline_eval import EvalResult, run_all
+from market_research_team.evaluation.offline_eval import EvalResult, run_all, scoped_eval_run
 
 
 @dataclass
@@ -26,15 +30,32 @@ class CacheRegressionReport:
     warm_results: list[EvalResult]
     regressions: list[tuple[EvalResult, EvalResult]]
     cache_hit_rate: float
+    # The warm run's own audit log (when run with `run_dir`); the release gate
+    # computes latency/cost/tool metrics from it alone.
+    warm_audit_path: Path | None = None
 
 
-def run_cold_vs_warm(provider: str | None = None) -> CacheRegressionReport:
+def run_cold_vs_warm(
+    provider: str | None = None,
+    *,
+    judge_llm: BaseChatModel | None = None,
+    run_dir: Path | None = None,
+) -> CacheRegressionReport:
+    """Run the suite cold then warm. With `run_dir`, each pass writes to its own
+    scoped directory (`cold/`, `warm/`) so the warm run's metrics are not mixed
+    with the cold run's. Only the warm pass is judged: it is the one gated."""
+
     if settings.cache_db_path.exists():
         settings.cache_db_path.unlink()
     stats.reset()
 
-    cold = run_all(provider)
-    warm = run_all(provider)
+    def _scope(name: str) -> AbstractContextManager[object]:
+        return scoped_eval_run(run_dir / name) if run_dir is not None else nullcontext()
+
+    with _scope("cold"):
+        cold = run_all(provider)  # type: ignore[arg-type]
+    with _scope("warm"):
+        warm = run_all(provider, judge_llm=judge_llm)  # type: ignore[arg-type]
 
     by_key = {(r.category, r.case_name, r.provider): r for r in cold}
     regressions = [
@@ -49,4 +70,5 @@ def run_cold_vs_warm(provider: str | None = None) -> CacheRegressionReport:
         warm_results=warm,
         regressions=regressions,
         cache_hit_rate=stats.hit_rate(),
+        warm_audit_path=run_dir / "warm" / "audit.jsonl" if run_dir is not None else None,
     )

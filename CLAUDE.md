@@ -16,7 +16,11 @@ python scripts/seed_vectorstore.py           # rebuild Chroma index from data/ra
 python scripts/run_graph_cli.py "<objective>" [--thread-id id]   # REAL LLM CALLS
 python scripts/run_gradio.py                 # launches the Gradio UI
 langgraph dev --no-browser                   # LangGraph Studio on :2024
-python scripts/run_evals.py [--provider openai] [--compare] [--langsmith]   # REAL LLM CALLS
+python scripts/run_evals.py [--provider openai] [--compare] [--langsmith] [--repeats N] [--update-baseline]   # REAL LLM CALLS
+python scripts/show_agent_manifest.py [--json | --diff <file>]  # agent version, no LLM calls
+python scripts/harvest_failures.py [--since 7d] [--no-langfuse]   # production failures -> candidates, free
+python scripts/promote_case.py list|show|promote|reject <id>      # curate candidates
+python scripts/prune_data.py [--days 90] [--apply]                 # retention, dry run by default
 ```
 
 ## Conventions (enforced by the code, not optional)
@@ -34,6 +38,18 @@ python scripts/run_evals.py [--provider openai] [--compare] [--langsmith]   # RE
   output filters, shared regex patterns, audit log) are in `security/`; a node that blocks,
   drops or redacts something returns a `guardrail_events` entry. Tests mirror these areas
   under `tests/<area>/`.
+- Agent version = `<pyproject version>+<fingerprint>` from `versioning.py`, which hashes
+  prompts (`SYSTEM_PROMPT` in each agent), model + params, tool schemas, knowledge/index
+  and safety limits. It is stamped on Langfuse traces, audit lines and eval results. A new
+  behavioural knob (prompt, limit, pattern list) must be added to the manifest there.
+- Release gate: `evals/gate.toml` (thresholds, tolerances, judge model, prices) and
+  `evals/baseline.json` (last approved metrics per provider) are committed. Only
+  `run_evals.py --repeats 3 --update-baseline` writes the baseline; committing it is the
+  promotion. Exit codes: 0 pass, 1 gate failed, 2 config/prerequisite error.
+- Feedback loop (`feedback/`): the harvester turns production failures into candidates in
+  `data/regression_candidates/` (git-ignored); a person promotes them into the committed
+  `evals/regressions.jsonl` (CLI or Gradio "Regressions" tab), which the release gate runs
+  as the `regression` category. Never auto-promote.
 - Config is `config.py` (pydantic-settings). Read `.env.example` for keys; never
   open `.env`.
 - Ruff: line length 100, rules E/F/I/UP. A hook auto-formats edited `.py` files.

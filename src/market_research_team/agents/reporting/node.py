@@ -29,7 +29,7 @@ _MAX_REVIEW_ROUNDS = 3
 _FINDINGS_TAG = "retrieved_research_data"
 _ANALYTICS_TAG = "computed_analytics"
 
-_SYSTEM_PROMPT = (
+SYSTEM_PROMPT = (
     "You write concise markdown research reports for a market and "
     "competitor research team. Given the objective, research findings, "
     "and computed analytics, write a well-organized markdown report with "
@@ -114,7 +114,7 @@ def draft_report(
     try:
         response = llm.invoke(
             [
-                SystemMessage(content=_SYSTEM_PROMPT),
+                SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=human_content),
             ],
             config={"tags": ["reporting_draft"]},
@@ -186,7 +186,13 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
     objective = state["objective"]
     findings = state.get("research_findings", [])
     results = state.get("analytics_results", [])
-    put_cached_response(objective, findings, results, settings.vectorstore_dir)
+    put_cached_response(
+        objective,
+        findings,
+        results,
+        settings.vectorstore_dir,
+        guardrail_events=state.get("guardrail_events", []),
+    )
     llm = get_chat_model()
     filename = f"{_slugify(objective)}.md"
 

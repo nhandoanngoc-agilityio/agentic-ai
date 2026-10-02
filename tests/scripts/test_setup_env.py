@@ -75,3 +75,31 @@ def test_missing_env_problems_passes_when_key_set_in_process_env(tmp_path: Path)
     )
 
     assert problems == []
+
+
+def test_install_commands_use_pip_when_the_interpreter_has_it() -> None:
+    commands = setup_env._install_commands("dev", python="/venv/python", has_pip=True, uv=None)
+
+    assert commands == [["/venv/python", "-m", "pip", "install", "-e", ".[dev]"]]
+
+
+def test_install_commands_use_uv_when_pip_is_missing() -> None:
+    # A venv created by `uv venv` has no pip; `uv pip` installs into it instead.
+    commands = setup_env._install_commands(
+        "dev", python="/venv/python", has_pip=False, uv="/usr/bin/uv"
+    )
+
+    assert commands == [
+        ["/usr/bin/uv", "pip", "install", "--python", "/venv/python", "-e", ".[dev]"]
+    ]
+
+
+def test_install_commands_bootstrap_pip_when_neither_is_available() -> None:
+    commands = setup_env._install_commands(
+        "dev,prod", python="/venv/python", has_pip=False, uv=None
+    )
+
+    assert commands == [
+        ["/venv/python", "-m", "ensurepip", "--upgrade"],
+        ["/venv/python", "-m", "pip", "install", "-e", ".[dev,prod]"],
+    ]

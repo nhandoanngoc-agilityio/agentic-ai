@@ -25,7 +25,7 @@ def _record_tool_call(tool_name: str, duration_ms: float, outcome: str) -> None:
     )
 
 
-_SYSTEM_PROMPT = (
+SYSTEM_PROMPT = (
     "You are the Analytics Agent for a market and competitor research team. "
     "You are given research findings (free text) about competitors and the "
     "market, plus the research objective. Identify quantitative claims in "
@@ -71,7 +71,7 @@ def run_tool_calling_loop(
     llm_with_tools = llm.bind_tools(tools)
 
     messages: list[BaseMessage] = [
-        SystemMessage(content=_SYSTEM_PROMPT),
+        SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(
             content=(
                 f"Research objective: {objective}\n\nFindings:\n{_findings_to_context(findings)}"

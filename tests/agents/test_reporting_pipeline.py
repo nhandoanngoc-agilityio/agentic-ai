@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.reporting.node import run_reporting_pipeline
 from market_research_team.config import settings
 
@@ -29,6 +30,14 @@ def _use_tmp_reports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(settings, "reports_dir", tmp_path / "reports")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Keep pytest hermetic: with an API key in .env, get_chat_model() would
+    # build a real client. None makes draft_report use its deterministic
+    # fallback, so this test exercises only the MCP wiring it is about.
+    monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
+
+
 async def test_run_reporting_pipeline_writes_a_real_file_via_mcp() -> None:
     report_path = await run_reporting_pipeline(
         "Assess Acme vs Globex pricing strategy", [_FINDING], [_RESULT]
@@ -39,9 +48,6 @@ async def test_run_reporting_pipeline_writes_a_real_file_via_mcp() -> None:
     assert written.parent == settings.reports_dir
     content = written.read_text(encoding="utf-8")
     assert "Assess Acme vs Globex pricing strategy" in content
-    # Checks the grounded price figure survives, not exact wording — with
-    # real credentials this goes through a real LLM, which paraphrases
-    # rather than echoing the source finding verbatim.
     assert "49" in content
 
 

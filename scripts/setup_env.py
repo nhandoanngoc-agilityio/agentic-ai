@@ -55,13 +55,35 @@ _PROD_IMPORTS = [
 _DEV_COMMANDS = ["pytest", "ruff"]
 
 
+def _install_commands(extra: str, *, python: str, has_pip: bool, uv: str | None) -> list[list[str]]:
+    """Commands that install the project into `python`'s environment.
+
+    A venv created by `uv venv` has no pip, so `python -m pip` fails there;
+    `uv pip install --python` installs into it instead. Without either,
+    bootstrap pip with `ensurepip` first.
+    """
+
+    target = ["-e", f".[{extra}]"]
+    if has_pip:
+        return [[python, "-m", "pip", "install", *target]]
+    if uv:
+        return [[uv, "pip", "install", "--python", python, *target]]
+    return [
+        [python, "-m", "ensurepip", "--upgrade"],
+        [python, "-m", "pip", "install", *target],
+    ]
+
+
 def _install(extra: str) -> None:
     print(f"Installing project (extras: {extra})...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", f".[{extra}]"],
-        cwd=_PROJECT_ROOT,
-        check=True,
+    commands = _install_commands(
+        extra,
+        python=sys.executable,
+        has_pip=importlib.util.find_spec("pip") is not None,
+        uv=shutil.which("uv"),
     )
+    for command in commands:
+        subprocess.run(command, cwd=_PROJECT_ROOT, check=True)
 
 
 def _check_imports(specs: list[tuple[str, str]]) -> list[str]:
@@ -100,7 +122,7 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--skip-install", action="store_true", help="Skip `pip install`; only validate."
+        "--skip-install", action="store_true", help="Skip the install step; only validate."
     )
     parser.add_argument(
         "--prod", action="store_true", help="Also install/validate the `prod` extra."
@@ -112,7 +134,7 @@ def main() -> None:
         try:
             _install(extra)
         except subprocess.CalledProcessError as exc:
-            sys.exit(f"pip install failed (exit code {exc.returncode}) — see output above.")
+            sys.exit(f"Install failed (exit code {exc.returncode}) — see output above.")
 
     print("\nValidating critical package imports...")
     import_specs = list(_REQUIRED_IMPORTS) + (_PROD_IMPORTS if args.prod else [])

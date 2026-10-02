@@ -44,6 +44,11 @@ def _client():
     if settings.langfuse_host:
         os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
     os.environ.setdefault("LANGFUSE_TRACING_ENVIRONMENT", settings.langfuse_tracing_environment)
+    # Build provenance on every trace; the behavioural version travels as the
+    # trace `version` (see `graph.run_graph` and `versioning.py`).
+    from market_research_team.versioning import git_sha
+
+    os.environ.setdefault("LANGFUSE_RELEASE", git_sha())
 
     return get_client()
 
@@ -79,6 +84,31 @@ def record_cache_event(layer: str, *, hit: bool, key_hash: str, latency_ms: floa
         )
     except Exception:
         pass
+
+
+def record_feedback_score(thread_id: str | None, rating: str, comment: str = "") -> None:
+    """Send a thumbs up/down to Langfuse as a `user_feedback` score on the run's
+    session (session_id == thread_id). No-op when tracing is off; never
+    raises -- a Langfuse hiccup must not break the UI."""
+
+    if not tracing_enabled() or not thread_id:
+        return
+    try:
+        _client().create_score(
+            name="user_feedback",
+            value=1.0 if rating == "up" else 0.0,
+            session_id=thread_id,
+            data_type="NUMERIC",
+            comment=comment or None,
+        )
+    except Exception:
+        pass
+
+
+def langfuse_api() -> Any:
+    """The Langfuse REST API client (traces, scores, observations)."""
+
+    return _client().api
 
 
 def flush() -> None:

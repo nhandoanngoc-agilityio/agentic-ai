@@ -69,3 +69,59 @@ Snapshot of what exists, for readers arriving after the sprint:
 - `langgraph.json` and the `graph` export are untouched — `langgraph dev` / LangGraph Studio still
   work exactly as before for debugging and time-travel; they're just no longer what the UI talks
   to.
+
+## 2026-09-29 — Agent versioning and trace stamping
+
+`versioning.py` builds an agent manifest with five components — instructions
+(system prompt hashes), model (provider, id, temperature, max_tokens), tools
+(schema hash per tool, grouped by the agent allowed to call it, plus MCP limits),
+knowledge (embedding/reranker models, chunking, retrieval k/top-n, index stamp)
+and memory + safety (checkpointer, cache TTLs, loop/review limits, guardrail
+pattern hashes). Each component is hashed; the hashes are hashed into a
+12-char fingerprint. The version label is `<pyproject version>+<fingerprint>`.
+
+Where it is stamped:
+
+- Langfuse: trace `version` = label, flat metadata with every component hash
+  and `git_sha`; `LANGFUSE_RELEASE` = git SHA (`graph.run_graph`, `observability.py`).
+- Audit log: every line carries `agent_version` (`security/audit.py`).
+- Evals: `data/eval_results/*.json` is now `{agent_version, git_sha, manifest,
+  results}`; LangSmith experiments get the same metadata.
+- Response cache: key includes the prompts + model hash, so a prompt edit
+  invalidates it without bumping `CACHE_POLICY_VERSION`.
+
+`scripts/show_agent_manifest.py --diff <eval file>` shows which components
+changed since a given eval run. Git SHA is provenance only (from `GIT_SHA` /
+`CI_COMMIT_SHA`, else `git rev-parse`); it is not in the fingerprint.
+
+## 2026-09-29 — Eval release gate
+
+`scripts/run_evals.py` now ends in a release verdict. Each provider's run
+writes to its own `data/eval_results/<run id>/<provider>/` (audit log and
+reports redirected there), so metrics cover only that run.
+`evaluation/metrics.py` turns results plus that audit log into task success,
+quality (judge mean), tool accuracy, safety, p95 latency and cost per graph
+run. `evaluation/gate.py` checks them against `evals/gate.toml` thresholds and,
+when present, the committed `evals/baseline.json` (tolerances and per-case
+regressions). Full-pipeline and safety graph runs use an in-memory
+checkpointer and answer the approval interrupt themselves
+(`evaluation/graph_runs.py`). Safety cases live in `evaluation/safety_eval.py`.
+Judge prompts are shared by the offline and LangSmith paths
+(`evaluation/judges.py`), and both use the pinned judge model from
+`gate.toml`. The baseline stores a judge id (quality source, judge model,
+prompt hash) so a judge change is flagged. `--cache-regression` scopes the
+cold and warm passes separately and gates only the warm one.
+
+## 2026-09-30 — Production feedback loop
+
+`feedback/` closes the loop from production into the release gate. `signals`
+groups audit events per thread; `langfuse_source` adds thumbs-down
+`user_feedback` scores (sent by Gradio) and ERROR observations; `triggers`
+flags thumbs-down, reviewer rejections, run errors, blocked inputs, dropped
+chunks, fallbacks and Langfuse errors. `harvest` writes scrubbed, deduplicated
+candidates; a curator fills in declarative expectations and promotes them (CLI
+or the Gradio "Regressions" tab) into `evals/regressions.jsonl`.
+`evaluation/regression_eval.py` runs those as pass/fail `regression` cases
+(`must_block` via the input guard only; the rest through the real graph).
+`retention` prunes audit lines and checkpoint threads older than 90 days at app
+start (daily), harvesting first.

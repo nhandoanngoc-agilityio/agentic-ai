@@ -225,3 +225,13 @@ def test_tool_call_summary_aggregates_duration_and_outcomes(tmp_path: Path) -> N
         "error": 0,
         "unknown_tool": 1,
     }
+
+
+def test_record_stamps_the_agent_version(tmp_path: Path) -> None:
+    from market_research_team.versioning import agent_version
+
+    log = tmp_path / "audit.jsonl"
+    audit.record("run_finished", "thread-1", path=log)
+
+    entry = json.loads(log.read_text(encoding="utf-8"))
+    assert entry["agent_version"] == agent_version()

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from market_research_team.security import audit
 
-_SYSTEM_PROMPT = (
+SYSTEM_PROMPT = (
     "You are a search query planner for a market and competitor research "
     "assistant backed by a vector database of competitor profiles and "
     "market-overview documents. Given a research objective, produce "
@@ -38,7 +38,7 @@ def rewrite_and_expand(objective: str, llm: BaseChatModel) -> list[str]:
         structured_llm = llm.with_structured_output(_QueryExpansion)
         result = structured_llm.invoke(
             [
-                SystemMessage(content=_SYSTEM_PROMPT),
+                SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=f"<research_objective>\n{objective}\n</research_objective>"),
             ],
             config={"tags": ["query_rewriter"]},
