@@ -21,7 +21,7 @@ _ROUTE_ANNOUNCEMENT: dict[RouteDecision, str] = {
     "FINISH": "All sub-agents have reported back. Ending run.",
 }
 
-_SYSTEM_PROMPT = (
+SYSTEM_PROMPT = (
     "You are the supervisor for a market and competitor research team made "
     "of a Research Agent, an Analytics Agent, and a Reporting Agent. Given "
     "the objective and a summary of what's been gathered so far, decide "
@@ -52,7 +52,7 @@ def _ask_llm_for_route(
     )
     structured_llm = llm.with_structured_output(_SupervisorDecision)
     decision = structured_llm.invoke(
-        [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=context)],
+        [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=context)],
         config={"tags": ["supervisor_router"]},
     )
     if decision.next not in allowed:

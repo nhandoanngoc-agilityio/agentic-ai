@@ -40,6 +40,10 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-dotenv>=1.0",
+
+    #--- UI / visualization ---
+    "gradio>=6.0",
+    "matplotlib>=3.9",
 ]
 
 [project.optional-dependencies]
@@ -53,10 +57,9 @@ dev = [
     "pytest-asyncio>=0.25",
     "ruff>=0.8",
 ]
-ui = [
-    "gradio>=6.0",
-    "matplotlib>=3.9",
-]
+# ui = [
+  
+# ]
 
 [build-system]
 requires = ["hatchling"]

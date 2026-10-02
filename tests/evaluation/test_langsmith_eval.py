@@ -348,7 +348,9 @@ def test_target_full_pipeline_calls_run_graph(monkeypatch) -> None:
             "error": None,
         }
 
-    monkeypatch.setattr(langsmith_eval.graph_module, "run_graph", _fake_run_graph)
+    from market_research_team import graph as graph_module
+
+    monkeypatch.setattr(graph_module, "run_graph", _fake_run_graph)
 
     result = langsmith_eval.target_full_pipeline({"objective": "assess pricing"}, llm=object())
 
@@ -409,15 +411,17 @@ def test_run_langsmith_eval_computes_pass_rate_and_restores_provider(monkeypatch
             self._name = name
             self._rows = rows
 
+        @property
         def experiment_name(self) -> str:
             return self._name
 
         def __iter__(self):
             return iter(self._rows)
 
-    def _fake_evaluate(_target, *, data, evaluators, experiment_prefix, client):
+    def _fake_evaluate(_target, *, data, evaluators, experiment_prefix, client, metadata):
         # data/evaluators/client are unused here but must keep these exact names --
         # run_langsmith_eval calls evaluate(..., data=..., evaluators=..., client=...) by keyword.
+        assert metadata["agent_version"]  # experiments are tagged with the agent version
         return _FakeExperimentResults(
             f"{experiment_prefix}-1",
             [{"evaluation_results": {"results": [_FakeEvalResult(1.0), _FakeEvalResult(1.0)]}}],
@@ -458,13 +462,14 @@ def test_run_langsmith_eval_computes_partial_pass_rate(monkeypatch) -> None:
             self._name = name
             self._rows = rows
 
+        @property
         def experiment_name(self) -> str:
             return self._name
 
         def __iter__(self):
             return iter(self._rows)
 
-    def _fake_evaluate(_target, *, data, evaluators, experiment_prefix, client):
+    def _fake_evaluate(_target, *, data, evaluators, experiment_prefix, client, metadata):
         # 3 rows: 2 fully passing (both evaluators score 1.0), 1 failing (one evaluator
         # scores 0.0) -- pass_rate should be 2/3, not 1.0 and not 0.0.
         return _FakeExperimentResults(
@@ -514,3 +519,128 @@ def test_judge_report_returns_structured_score() -> None:
     assert judgment.score == 0.6
     assert judgment.passed is True
     assert judgment.reasoning == "mostly grounded"
+
+
+def test_run_langsmith_eval_reports_mean_judge_score(monkeypatch) -> None:
+    monkeypatch.setattr(langsmith_eval, "get_chat_model", lambda: object())
+    monkeypatch.setattr(langsmith_eval, "Client", lambda: _FakeLangSmithClient())
+    monkeypatch.setattr(
+        langsmith_eval, "sync_dataset", lambda client, category, examples: _FakeDataset(category)
+    )
+
+    class _Result:
+        def __init__(self, key: str, score: float) -> None:
+            self.key = key
+            self.score = score
+
+    class _Experiment:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        @property
+        def experiment_name(self) -> str:
+            return self._name
+
+        def __iter__(self):
+            rows = [
+                [_Result("deterministic", 1.0), _Result("llm_judge", 0.8)],
+                [_Result("deterministic", 1.0), _Result("llm_judge", 0.6)],
+            ]
+            return iter({"evaluation_results": {"results": row}} for row in rows)
+
+    monkeypatch.setattr(
+        langsmith_eval,
+        "evaluate",
+        lambda _t, *, data, evaluators, experiment_prefix, client, metadata: _Experiment(
+            experiment_prefix
+        ),
+    )
+
+    summaries = langsmith_eval.run_langsmith_eval("anthropic")
+
+    assert all(summary.judged_count == 2 for summary in summaries)
+    assert all(abs(summary.mean_judge_score - 0.7) < 1e-9 for summary in summaries)
+
+
+def test_run_langsmith_eval_uses_the_given_judge_model(monkeypatch) -> None:
+    monkeypatch.setattr(langsmith_eval, "get_chat_model", lambda: "candidate")
+    monkeypatch.setattr(langsmith_eval, "Client", lambda: _FakeLangSmithClient())
+    monkeypatch.setattr(
+        langsmith_eval, "sync_dataset", lambda client, category, examples: _FakeDataset(category)
+    )
+    judge_llms: list[object] = []
+
+    class _Experiment:
+        @property
+        def experiment_name(self) -> str:
+            return "e"
+
+        def __iter__(self):
+            return iter([])
+
+    def fake_evaluate(target, *, data, evaluators, experiment_prefix, client, metadata):
+        judge_llms.append(evaluators[1].keywords["llm"])
+        assert target.keywords["llm"] == "candidate"
+        return _Experiment()
+
+    monkeypatch.setattr(langsmith_eval, "evaluate", fake_evaluate)
+
+    summaries = langsmith_eval.run_langsmith_eval("anthropic", judge_llm="judge")
+
+    assert judge_llms and all(llm == "judge" for llm in judge_llms)
+    assert all(summary.row_count == 0 for summary in summaries)
+
+
+def test_target_full_pipeline_answers_the_approval_interrupt(monkeypatch) -> None:
+    from langgraph.types import Command
+
+    from market_research_team import graph as graph_module
+
+    def fake_run_graph(state, *, compiled_graph=None, thread_id=None, **_):
+        if isinstance(state, Command):
+            return {"report_path": "reports/x.md", "error": None}
+        return {"__interrupt__": ["pending"]}
+
+    monkeypatch.setattr(graph_module, "run_graph", fake_run_graph)
+
+    outputs = langsmith_eval.target_full_pipeline({"objective": "Assess Acme"}, llm=object())
+
+    assert outputs["report_path"] == "reports/x.md"
+
+
+def test_langsmith_api_key_falls_back_to_dotenv_settings(monkeypatch) -> None:
+    from market_research_team.config import settings
+
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.setattr(settings, "langsmith_api_key", None)
+    monkeypatch.setattr(settings, "langchain_api_key", "lsv2-from-langchain-var")
+
+    assert langsmith_eval.langsmith_api_key() == "lsv2-from-langchain-var"
+
+    monkeypatch.setattr(settings, "langsmith_api_key", "lsv2-from-dotenv")
+    assert langsmith_eval.langsmith_api_key() == "lsv2-from-dotenv"
+
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2-from-shell")
+    assert langsmith_eval.langsmith_api_key() == "lsv2-from-shell"
+
+
+def test_run_langsmith_eval_exports_the_dotenv_key_for_the_client(monkeypatch) -> None:
+    import os
+
+    from market_research_team.config import settings
+
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.setattr(settings, "langsmith_api_key", "lsv2-from-dotenv")
+    monkeypatch.setattr(langsmith_eval, "get_chat_model", lambda: object())
+    seen: dict = {}
+
+    def fake_client():
+        seen["key"] = os.environ.get("LANGSMITH_API_KEY")
+        raise RuntimeError("stop after client construction")
+
+    monkeypatch.setattr(langsmith_eval, "Client", fake_client)
+
+    with pytest.raises(RuntimeError):
+        langsmith_eval.run_langsmith_eval("anthropic")
+
+    assert seen["key"] == "lsv2-from-dotenv"

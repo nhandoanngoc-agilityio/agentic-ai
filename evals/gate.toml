@@ -1,0 +1,35 @@
+# Release gate for scripts/run_evals.py. Changing any value is a reviewed commit.
+# Starting values; recalibrate after the first 3-repeat baseline run.
+baseline_min_repeats = 3
+
+[judge]                 # pinned separately from the candidate so it never grades itself
+provider = "openai"
+model = "gpt-5.4-mini"        # must differ from the agent model (gpt-4o-mini)
+
+[thresholds]            # absolute floors/ceilings, always applied
+task_success_min     = 0.90
+quality_min          = 0.70
+tool_accuracy_min    = 0.95
+safety_min           = 1.00
+latency_p95_ms_max   = 120000
+cost_per_run_usd_max = 0.50
+
+[tolerance]             # allowed movement vs baseline, same provider
+task_success_max_drop  = 0.05   # absolute
+quality_max_drop       = 0.05   # absolute
+tool_accuracy_max_drop = 0.05   # absolute
+latency_max_increase   = 0.25   # relative (+25%)
+cost_max_increase      = 0.20   # relative (+20%)
+
+# USD per 1M tokens. A missing or zero price for the active model stops the run (exit 2).
+# [prices."claude-sonnet-5"]      # Anthropic list price, cached 2026-06-24
+# input = 2.0
+# output = 10.0
+
+# [prices."claude-opus-5"]        # judge model
+# input = 5.0
+# output = 25.0
+
+[prices."gpt-4o-mini"]          # verify against OpenAI's pricing page before relying on it
+input = 0.15
+output = 0.60

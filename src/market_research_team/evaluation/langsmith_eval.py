@@ -4,22 +4,21 @@ checks in evaluation/checks.py. Powers the --langsmith flag on scripts/run_evals
 """
 
 import functools
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
 from langsmith import Client, evaluate
-from pydantic import BaseModel, Field
 
-from market_research_team import graph as graph_module
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.reporting.node import draft_report
 from market_research_team.agents.supervisor.router import decide_next_step
 from market_research_team.config import settings
-from market_research_team.evaluation import checks
+from market_research_team.evaluation import checks, judges
 from market_research_team.evaluation.golden_dataset import (
     ANALYTICS_CASES,
     FULL_PIPELINE_CASES,
@@ -27,9 +26,15 @@ from market_research_team.evaluation.golden_dataset import (
     REPORTING_CASES,
     SUPERVISOR_DECISION_CASES,
 )
+from market_research_team.evaluation.graph_runs import run_graph_with_decision
+from market_research_team.evaluation.judges import (
+    JudgeScoreSchema as _JudgeScoreSchema,  # noqa: F401
+)
+from market_research_team.evaluation.judges import judge_report
 from market_research_team.llm import get_chat_model
 from market_research_team.retrieval.query_rewriter import rewrite_and_expand
 from market_research_team.state import AgentState
+from market_research_team.versioning import trace_metadata
 
 
 @dataclass
@@ -42,18 +47,17 @@ class JudgeScore:
 @dataclass
 class LangSmithEvalSummary:
     category: str
-    # From ExperimentResults.experiment_name() -- the SDK doesn't hand back a ready-made UI
+    # From ExperimentResults.experiment_name -- the SDK doesn't hand back a ready-made UI
     # URL, so callers report the name (findable in the LangSmith UI) instead.
     experiment_name: str
     pass_rate: float
-
-
-class _JudgeScoreSchema(BaseModel):
-    """Structured-output schema for every llm_judge_* evaluator -- same shape as JudgeScore."""
-
-    passed: bool = Field(description="Whether the output meets the judge's quality bar.")
-    score: float = Field(description="A 0.0-1.0 quality score, 1.0 being the best.")
-    reasoning: str = Field(description="Brief justification for the score.")
+    # Mean of the `llm_judge` scores across the experiment's rows; the gate
+    # uses it as the quality metric when --langsmith is passed.
+    mean_judge_score: float | None = None
+    judged_count: int = 0
+    # Rows in the experiment; rows minus judged_count were not judged (judge error).
+    # None means unknown and is treated as judged_count.
+    row_count: int | None = None
 
 
 def sync_dataset(client: Any, category: str, examples: list[dict[str, Any]]) -> Any:
@@ -117,24 +121,10 @@ def deterministic_evaluator_query_rewrite(run: Any, example: Any) -> dict[str, A
     }
 
 
-_QUERY_REWRITE_JUDGE_PROMPT = (
-    "You are grading whether a set of search sub-queries are good, non-redundant "
-    "decompositions of a research objective for a market and competitor research "
-    "assistant. Score 1.0 if the queries clearly cover distinct angles of the "
-    "objective, lower if they're redundant, off-topic, or too vague."
-)
-
-
 def llm_judge_query_rewrite(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
     queries = (run.outputs or {}).get("queries", [])
     objective = (example.inputs or {}).get("objective", "")
-    structured_llm = llm.with_structured_output(_JudgeScoreSchema)
-    judgment = structured_llm.invoke(
-        [
-            SystemMessage(content=_QUERY_REWRITE_JUDGE_PROMPT),
-            HumanMessage(content=f"Objective: {objective}\nQueries: {queries}"),
-        ]
-    )
+    judgment = judges.judge_query_rewrite(objective, queries, llm)
     return {"key": "llm_judge", "score": judgment.score, "comment": judgment.reasoning}
 
 
@@ -176,31 +166,11 @@ def deterministic_evaluator_supervisor_decision(run: Any, example: Any) -> dict[
     }
 
 
-_SUPERVISOR_JUDGE_PROMPT = (
-    "You are grading whether a supervisor's routing decision for a market research "
-    "multi-agent system is reasonable given the current state, not just technically "
-    "allowed. Score 1.0 if the decision clearly makes sense given what's been "
-    "gathered so far."
-)
-
-
 def llm_judge_supervisor_decision(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
     decision = (run.outputs or {}).get("decision")
     findings_count = len((example.inputs or {}).get("research_findings", []))
     results_count = len((example.inputs or {}).get("analytics_results", []))
-    structured_llm = llm.with_structured_output(_JudgeScoreSchema)
-    judgment = structured_llm.invoke(
-        [
-            SystemMessage(content=_SUPERVISOR_JUDGE_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Research findings so far: {findings_count}\n"
-                    f"Analytics results so far: {results_count}\n"
-                    f"Decision made: {decision!r}"
-                )
-            ),
-        ]
-    )
+    judgment = judges.judge_supervisor_decision(findings_count, results_count, decision, llm)
     return {"key": "llm_judge", "score": judgment.score, "comment": judgment.reasoning}
 
 
@@ -240,24 +210,10 @@ def deterministic_evaluator_analytics(run: Any, example: Any) -> dict[str, Any]:
     }
 
 
-_ANALYTICS_JUDGE_PROMPT = (
-    "You are grading whether computed analytics results are grounded in the given "
-    "research findings for a market research system. Score 1.0 only if every "
-    "reported value plausibly traces back to a number stated in the findings -- "
-    "score low if any value looks invented."
-)
-
-
 def llm_judge_analytics(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
     results = (run.outputs or {}).get("results", [])
     findings = (example.inputs or {}).get("findings", [])
-    structured_llm = llm.with_structured_output(_JudgeScoreSchema)
-    judgment = structured_llm.invoke(
-        [
-            SystemMessage(content=_ANALYTICS_JUDGE_PROMPT),
-            HumanMessage(content=f"Findings: {findings}\nComputed results: {results}"),
-        ]
-    )
+    judgment = judges.judge_analytics(findings, results, llm)
     return {"key": "llm_judge", "score": judgment.score, "comment": judgment.reasoning}
 
 
@@ -299,38 +255,6 @@ def deterministic_evaluator_reporting(run: Any, example: Any) -> dict[str, Any]:
     }
 
 
-_REPORTING_JUDGE_PROMPT = (
-    "You are grading a markdown research report for faithfulness to its given "
-    "findings/results and overall structure/clarity. Score 1.0 only if the report "
-    "is well-organized and introduces no facts beyond what was given."
-)
-
-
-def judge_report(
-    objective: str,
-    findings: list[dict[str, Any]],
-    results: list[dict[str, Any]],
-    report: str,
-    llm: BaseChatModel,
-) -> _JudgeScoreSchema:
-    """Groundedness + structure judge over a drafted report. Standalone (rather than inlined
-    into llm_judge_reporting) so any caller that needs to judge a report shares this one
-    prompt/logic path instead of duplicating it."""
-
-    structured_llm = llm.with_structured_output(_JudgeScoreSchema)
-    return structured_llm.invoke(
-        [
-            SystemMessage(content=_REPORTING_JUDGE_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Objective: {objective}\nFindings: {findings}\nResults: {results}\n"
-                    f"Report:\n{report}"
-                )
-            ),
-        ]
-    )
-
-
 def llm_judge_reporting(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
     report = (run.outputs or {}).get("report", "")
     objective = (example.inputs or {}).get("objective", "")
@@ -348,17 +272,14 @@ def _full_pipeline_examples() -> list[dict[str, Any]]:
 
 def target_full_pipeline(inputs: dict[str, Any], *, llm: BaseChatModel) -> dict[str, Any]:
     # llm accepted for signature uniformity with the other target_* functions (all bound via
-    # functools.partial(fn, llm=llm) in run_langsmith_eval) -- run_graph builds its own LLMs
-    # internally via get_chat_model(), so it's unused here.
-    initial_state: AgentState = {
-        "messages": [],
-        "objective": inputs["objective"],
-        "next": "research",
-        "research_findings": [],
-        "analytics_results": [],
-        "report_path": None,
-    }
-    final_state = graph_module.run_graph(initial_state)
+    # functools.partial(fn, llm=llm) in run_langsmith_eval) -- the graph builds its own LLMs
+    # internally via get_chat_model(), so it's unused here. The approval interrupt is
+    # answered with an approval, same as the offline full-pipeline eval.
+    final_state = run_graph_with_decision(
+        inputs["objective"],
+        thread_id=f"eval-langsmith-{uuid.uuid4().hex[:8]}",
+        decision={"approved": True},
+    )
     return {
         "error": final_state.get("error"),
         "report_path": final_state.get("report_path"),
@@ -377,25 +298,12 @@ def deterministic_evaluator_full_pipeline(run: Any, example: Any) -> dict[str, A
     }
 
 
-_FULL_PIPELINE_JUDGE_PROMPT = (
-    "You are grading the overall quality of a market research report written by a "
-    "multi-agent pipeline, given the original objective. Score 1.0 if the report "
-    "substantively and coherently addresses the objective."
-)
-
-
 def llm_judge_full_pipeline(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
     outputs = run.outputs or {}
     report_path = outputs.get("report_path")
     objective = (example.inputs or {}).get("objective", "")
     report_text = Path(report_path).read_text(encoding="utf-8") if report_path else ""
-    structured_llm = llm.with_structured_output(_JudgeScoreSchema)
-    judgment = structured_llm.invoke(
-        [
-            SystemMessage(content=_FULL_PIPELINE_JUDGE_PROMPT),
-            HumanMessage(content=f"Objective: {objective}\nReport:\n{report_text}"),
-        ]
-    )
+    judgment = judges.judge_full_pipeline(objective, report_text, llm)
     return {"key": "llm_judge", "score": judgment.score, "comment": judgment.reasoning}
 
 
@@ -438,13 +346,35 @@ _CATEGORY_SPECS: list[tuple[str, Any, Any, Any, Any]] = [
 ]
 
 
+def _experiment_name(results: Any) -> str:
+    """`ExperimentResults.experiment_name` is a property in current langsmith
+    SDKs (0.14+) and was a method in older ones; pyproject allows both."""
+
+    name = results.experiment_name
+    return str(name() if callable(name) else name)
+
+
+def langsmith_api_key() -> str | None:
+    """The LangSmith key from the shell environment, else from `.env` (via settings)."""
+
+    return (
+        os.environ.get("LANGSMITH_API_KEY")
+        or settings.langsmith_api_key
+        or settings.langchain_api_key
+    )
+
+
 def run_langsmith_eval(
     provider: Literal["anthropic", "openai"] | None = None,
+    *,
+    judge_llm: BaseChatModel | None = None,
 ) -> list[LangSmithEvalSummary]:
     """Sync each category's dataset and run a LangSmith experiment against it, layering the
     existing deterministic checks with a category-tailored LLM-judge. Mirrors
     offline_eval.run_all()'s provider-override-then-restore pattern. Requires
-    LANGSMITH_API_KEY to be set (validated by the caller -- see scripts/run_evals.py)."""
+    LANGSMITH_API_KEY to be set (validated by the caller -- see scripts/run_evals.py).
+    `judge_llm` grades the outputs (the release gate pins it so the candidate never grades
+    itself); without it the candidate model judges, as before."""
 
     original_provider = settings.llm_provider
     if provider is not None:
@@ -452,6 +382,12 @@ def run_langsmith_eval(
 
     try:
         llm = get_chat_model()
+        judge = judge_llm or llm
+        # The LangSmith client reads its key from os.environ only; a key kept in
+        # `.env` reaches it this way (never overriding one already exported).
+        key = langsmith_api_key()
+        if key:
+            os.environ.setdefault("LANGSMITH_API_KEY", key)
         client = Client()
         summaries: list[LangSmithEvalSummary] = []
         for category, examples_fn, target_fn, deterministic_fn, judge_fn in _CATEGORY_SPECS:
@@ -460,8 +396,9 @@ def run_langsmith_eval(
             results = evaluate(
                 functools.partial(target_fn, llm=llm),
                 data=dataset.name,
-                evaluators=[deterministic_fn, functools.partial(judge_fn, llm=llm)],
+                evaluators=[deterministic_fn, functools.partial(judge_fn, llm=judge)],
                 experiment_prefix=f"market-research-team-{category}",
+                metadata=trace_metadata(),
                 client=client,
             )
             rows = list(results)
@@ -472,7 +409,23 @@ def run_langsmith_eval(
                 if all(result.score == 1.0 for result in row["evaluation_results"]["results"])
             )
             pass_rate = fully_passed / total if total else 0.0
-            summaries.append(LangSmithEvalSummary(category, results.experiment_name(), pass_rate))
+            judge_scores = [
+                float(result.score)
+                for row in rows
+                for result in row["evaluation_results"]["results"]
+                if getattr(result, "key", None) == "llm_judge" and result.score is not None
+            ]
+            mean_judge = sum(judge_scores) / len(judge_scores) if judge_scores else None
+            summaries.append(
+                LangSmithEvalSummary(
+                    category,
+                    _experiment_name(results),
+                    pass_rate,
+                    mean_judge_score=mean_judge,
+                    judged_count=len(judge_scores),
+                    row_count=total,
+                )
+            )
         return summaries
     finally:
         settings.llm_provider = original_provider

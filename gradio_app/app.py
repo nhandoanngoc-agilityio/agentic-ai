@@ -14,8 +14,11 @@ from langgraph.types import Command
 from matplotlib.figure import Figure
 
 from gradio_app.charts import build_comparison_figure
+from gradio_app.regressions_tab import add_regressions_tab
 from market_research_team.config import settings
+from market_research_team.feedback.candidates import scrub_text
 from market_research_team.graph import run_graph
+from market_research_team.observability import record_feedback_score
 from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
@@ -94,6 +97,8 @@ def submit_objective(
     try:
         objective = validate_objective(objective)
     except Exception as exc:
+        if objective.strip():  # an empty submission is not an attempt worth harvesting
+            audit.record_input_rejection(thread_id, objective, exc)
         new_history.append({"role": "assistant", "content": f"**Run failed:** {exc}"})
         return new_history, thread_id, None, None, False, objective, True
 
@@ -135,6 +140,8 @@ def resolve_interrupt(
     """
 
     new_history = [*history, {"role": "user", "content": f"Decision: {decision}"}]
+    # Same event the CLI writes: reviewer corrections feed the failure harvester.
+    audit.record("human_decision", thread_id, decision=decision)
 
     try:
         result = run_graph(
@@ -168,6 +175,7 @@ def record_satisfaction_rating(thread_id: str | None, objective: str, rating: st
     """
 
     audit.record("user_satisfaction", thread_id, objective=objective, rating=rating)
+    record_feedback_score(thread_id, rating, scrub_text(objective))
 
 
 def list_report_files() -> list[str]:
@@ -253,6 +261,8 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
                 report_dropdown.change(
                     on_report_selected, inputs=[report_dropdown], outputs=[report_preview]
                 )
+
+            add_regressions_tab()
 
         thread_state = gr.State(None)
         interrupt_state = gr.State(None)

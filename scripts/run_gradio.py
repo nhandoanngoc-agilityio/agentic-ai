@@ -10,8 +10,11 @@ approval and be resumed across Gradio interactions on the same thread.
 
 from gradio_app.app import build
 
+from market_research_team.feedback.retention import maybe_auto_prune
+
 
 def main() -> None:
+    maybe_auto_prune()  # at most daily; see docs/security.md -> Retention
     build().launch()
 
 

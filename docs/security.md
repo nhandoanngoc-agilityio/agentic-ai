@@ -54,6 +54,23 @@ and applies to both the objective and the retrieved chunks.
 - Secrets: `.env` is never read or written by the agents. Credential-shaped strings are
   scrubbed from reports and from audit entries.
 
+## Retention
+
+- `data/audit.jsonl` and checkpoint threads are kept for `AUDIT_RETENTION_DAYS`
+  (default 90). Older audit lines and threads (including runs still paused for
+  approval) are deleted.
+- Pruning runs automatically when the Gradio app or the CLI starts, at most once
+  every 24 h (`AUTO_PRUNE_ENABLED=false` turns it off). `python scripts/prune_data.py`
+  shows what would be removed; `--apply` deletes.
+- Before deleting, pruning harvests failures in the window into
+  `data/regression_candidates/` (git-ignored), so a thumbs-down, rejection, error or
+  blocked attempt is never lost unrecorded. Candidates keep their own scrubbed
+  copy of the evidence.
+- Candidate text is scrubbed with the PII and secret patterns. Promotion to the
+  committed `evals/regressions.jsonl` refuses anything that still matches; the
+  curator reads the objective before promoting.
+- Langfuse data is not pruned here; set retention in Langfuse.
+
 ## Operating the guardrails
 
 - **See what fired**: the CLI prints `guardrail_events` at the end of every run and shows

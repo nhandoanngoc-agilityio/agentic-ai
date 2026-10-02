@@ -1,4 +1,5 @@
 from market_research_team.caching import store
+from market_research_team.config import settings
 
 
 def test_put_get_roundtrip(tmp_path):
@@ -51,3 +52,31 @@ def test_current_vectorstore_version_reads_stamp(tmp_path):
     (persist_dir / ".cache_version").write_text("some-uuid", encoding="utf-8")
 
     assert store.current_vectorstore_version(persist_dir) == "some-uuid"
+
+
+def test_put_purges_every_expired_row(tmp_path):
+    conn = store.get_connection(tmp_path / "cache.sqlite")
+    store.put(
+        conn, layer="retrieval", key_hash="old", version="v1", value={}, ttl_seconds=10, now=0.0
+    )
+
+    store.put(
+        conn, layer="retrieval", key_hash="new", version="v1", value={}, ttl_seconds=10, now=100.0
+    )
+
+    keys = [row[0] for row in conn.execute("SELECT key_hash FROM cache_entries")]
+    assert keys == ["new"]
+
+
+def test_cache_version_changes_when_policy_version_is_bumped(tmp_path, monkeypatch):
+    persist_dir = tmp_path / "vectorstore"
+    persist_dir.mkdir()
+    (persist_dir / ".cache_version").write_text("seed-1", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "cache_policy_version", "1")
+    before = store.cache_version(persist_dir)
+    monkeypatch.setattr(settings, "cache_policy_version", "2")
+    after = store.cache_version(persist_dir)
+
+    assert before != after
+    assert before.startswith("seed-1")

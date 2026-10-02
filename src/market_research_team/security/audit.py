@@ -32,6 +32,17 @@ def _scrub(value: Any) -> Any:
     return value
 
 
+def _agent_version() -> str:
+    """Imported lazily: `versioning` reads the agent modules, which import this one."""
+
+    try:
+        from market_research_team.versioning import agent_version
+
+        return agent_version()
+    except Exception:
+        return "unknown"
+
+
 def record(event: str, thread_id: str | None, *, path: Path | None = None, **fields: Any) -> None:
     """Append one JSON line describing `event` to the audit log."""
 
@@ -39,6 +50,7 @@ def record(event: str, thread_id: str | None, *, path: Path | None = None, **fie
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "event": event,
         "thread_id": thread_id,
+        "agent_version": _agent_version(),
         **_scrub(fields),
     }
     target = path or settings.audit_log_path
@@ -48,6 +60,22 @@ def record(event: str, thread_id: str | None, *, path: Path | None = None, **fie
             handle.write(json.dumps(entry, default=str) + "\n")
     except Exception:
         logger.exception("Audit write failed for event %r", event)
+
+
+def record_input_rejection(thread_id: str | None, objective: str, error: Exception) -> None:
+    """Record an objective rejected before the graph ran (Gradio and the CLI
+    validate first), in the same shape `input_guard_node` produces, so the
+    failure harvester sees the blocked attempt."""
+
+    record(
+        "run_finished",
+        thread_id,
+        objective=objective,
+        route_trace=[],
+        error=f"Input rejected: {error}",
+        guardrail_events=[{"layer": "input", "rule": "validate_objective", "detail": str(error)}],
+        report_path=None,
+    )
 
 
 def satisfaction_rate(path: Path | None = None) -> tuple[float, int]:

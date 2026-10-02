@@ -99,3 +99,47 @@ def test_token_usage_callback_never_raises_when_usage_metadata_missing() -> None
     handler = observability.TokenUsageCallbackHandler()
 
     handler.on_llm_end(_llm_result(None), run_id=uuid.uuid4(), tags=["query_rewriter"])
+
+
+def _fake_client(client):
+    """Stand-in for the lru_cached `_client`; the autouse fixture calls cache_clear."""
+
+    def factory():
+        return client
+
+    factory.cache_clear = lambda: None
+    return factory
+
+
+def test_record_feedback_score_sends_a_session_score(monkeypatch: pytest.MonkeyPatch):
+    sent: dict = {}
+
+    class _Client:
+        def create_score(self, **kwargs):
+            sent.update(kwargs)
+
+    monkeypatch.setattr(observability, "tracing_enabled", lambda: True)
+    monkeypatch.setattr(observability, "_client", _fake_client(_Client()))
+
+    observability.record_feedback_score("thread-1", "down", "Compare Acme")
+
+    assert sent == {
+        "name": "user_feedback",
+        "value": 0.0,
+        "session_id": "thread-1",
+        "data_type": "NUMERIC",
+        "comment": "Compare Acme",
+    }
+
+
+def test_record_feedback_score_is_silent_when_disabled_or_failing(monkeypatch: pytest.MonkeyPatch):
+    class _Boom:
+        def create_score(self, **kwargs):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(observability, "tracing_enabled", lambda: False)
+    observability.record_feedback_score("thread-1", "up")  # no client touched
+
+    monkeypatch.setattr(observability, "tracing_enabled", lambda: True)
+    monkeypatch.setattr(observability, "_client", _fake_client(_Boom()))
+    observability.record_feedback_score("thread-1", "up")  # must not raise

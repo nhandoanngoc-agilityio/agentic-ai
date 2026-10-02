@@ -229,22 +229,167 @@ def test_run_all_restores_llm_provider_even_on_failure(monkeypatch: pytest.Monke
     assert settings.llm_provider == "anthropic"
 
 
-def test_save_results_writes_a_timestamped_json_file(tmp_path: Path) -> None:
+def test_save_results_writes_results_json_in_the_run_dir(tmp_path: Path) -> None:
+    from market_research_team import versioning
     from market_research_team.evaluation.offline_eval import EvalResult
 
-    results = [EvalResult("category", "case", True, "detail", "provider")]
+    results = [EvalResult("category", "case", True, "detail", "provider", 0.5, 1)]
 
-    path = save_results(results, tmp_path)
+    path = save_results(results, tmp_path / "eval_1", gate=[{"passed": True}])
 
-    assert path.exists()
-    assert path.parent == tmp_path
+    assert path == tmp_path / "eval_1" / "results.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data == [
-        {
-            "category": "category",
-            "case_name": "case",
-            "passed": True,
-            "detail": "detail",
-            "provider": "provider",
-        }
-    ]
+    assert data["results"][0]["judge_score"] == 0.5 and data["results"][0]["repeat"] == 1
+    assert data["gate"] == [{"passed": True}]
+    assert data["agent_version"] == versioning.agent_version()
+    assert data["manifest"]["fingerprint"] == versioning.build_manifest()["fingerprint"]
+
+
+def test_scoped_eval_run_redirects_and_restores_paths(tmp_path: Path) -> None:
+    from market_research_team.evaluation.offline_eval import scoped_eval_run
+
+    original_audit, original_reports = settings.audit_log_path, settings.reports_dir
+
+    with scoped_eval_run(tmp_path / "run") as run_dir:
+        assert settings.audit_log_path == run_dir / "audit.jsonl"
+        assert settings.reports_dir == run_dir / "reports"
+
+    assert settings.audit_log_path == original_audit
+    assert settings.reports_dir == original_reports
+
+
+def test_scoped_eval_run_restores_paths_on_error(tmp_path: Path) -> None:
+    from market_research_team.evaluation.offline_eval import scoped_eval_run
+
+    original_audit = settings.audit_log_path
+
+    with pytest.raises(RuntimeError):
+        with scoped_eval_run(tmp_path / "run"):
+            raise RuntimeError("boom")
+
+    assert settings.audit_log_path == original_audit
+
+
+def test_run_all_includes_safety_and_passes_repeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, object] = {}
+
+    def record(name):
+        def _fn(*args, **kwargs):
+            calls[name] = kwargs
+            return []
+
+        return _fn
+
+    monkeypatch.setattr(offline_eval, "get_chat_model", lambda: object())
+    for name in (
+        "evaluate_query_rewriter",
+        "evaluate_retrieval",
+        "evaluate_supervisor_decision",
+        "evaluate_analytics",
+        "evaluate_reporting",
+        "evaluate_full_pipeline",
+        "evaluate_safety",
+        "evaluate_regressions",
+    ):
+        monkeypatch.setattr(offline_eval, name, record(name))
+
+    offline_eval.run_all("anthropic", repeat=2, judge_llm="J")  # type: ignore[arg-type]
+
+    assert calls["evaluate_safety"] == {"repeat": 2}
+    assert calls["evaluate_reporting"] == {"judge_llm": "J", "repeat": 2}
+    assert calls["evaluate_retrieval"] == {"repeat": 2}
+    assert calls["evaluate_regressions"] == {"repeat": 2}
+
+
+class _FakeJudge:
+    def __init__(self, score: float | None = None, error: Exception | None = None) -> None:
+        self._score = score
+        self._error = error
+
+    def with_structured_output(self, _schema: object) -> "_FakeJudge":
+        return self
+
+    def invoke(self, _messages: list[object]) -> _FakeStructuredResult:
+        if self._error:
+            raise self._error
+        return _FakeStructuredResult(passed=True, score=self._score, reasoning="r")
+
+
+def test_evaluators_record_judge_score_and_repeat() -> None:
+    llm = _FakeQueryRewriteLLM(["acme pricing", "globex pricing"])
+
+    results = evaluate_query_rewriter(
+        llm,  # type: ignore[arg-type]
+        "p",
+        judge_llm=_FakeJudge(0.75),  # type: ignore[arg-type]
+        repeat=2,
+    )
+
+    assert all(r.judge_score == 0.75 and r.repeat == 2 for r in results)
+
+
+def test_judge_exception_leaves_case_unjudged() -> None:
+    llm = _FakeQueryRewriteLLM(["acme pricing"])
+
+    results = evaluate_query_rewriter(
+        llm,  # type: ignore[arg-type]
+        "p",
+        judge_llm=_FakeJudge(error=RuntimeError("bad json")),  # type: ignore[arg-type]
+    )
+
+    assert all(r.judge_score is None for r in results)
+
+
+def test_judge_score_is_clamped_to_unit_interval() -> None:
+    llm = _FakeQueryRewriteLLM(["acme pricing"])
+
+    results = evaluate_query_rewriter(llm, "p", judge_llm=_FakeJudge(7.0))  # type: ignore[arg-type]
+
+    assert all(r.judge_score == 1.0 for r in results)
+
+
+def test_evaluate_analytics_emits_tool_selection_result() -> None:
+    tool_call = AIMessage(
+        content="",
+        tool_calls=[{"name": "value_range", "args": {"values": [150000, 400000]}, "id": "1"}],
+    )
+    llm = _FakeAnalyticsLLM([tool_call, AIMessage(content="done")])
+
+    results = evaluate_analytics(llm, "p")  # type: ignore[arg-type]
+
+    selection = [r for r in results if r.category == "tool_selection"]
+    assert selection and selection[0].passed
+    assert "value_range" in selection[0].detail
+
+
+def test_evaluate_full_pipeline_answers_approval_with_a_thread_id(monkeypatch) -> None:
+    from langgraph.types import Command
+
+    seen: dict[str, object] = {}
+
+    def fake_run_graph(state, *, compiled_graph=None, thread_id=None, **_):
+        seen["thread_id"] = thread_id
+        if isinstance(state, Command):
+            seen["resume"] = state.resume
+            return {"report_path": "reports/mock.md", "error": None}
+        return {"__interrupt__": ["pending"]}
+
+    monkeypatch.setattr(graph_module, "run_graph", fake_run_graph)
+
+    results = evaluate_full_pipeline("p", repeat=1)
+
+    assert results[0].passed
+    assert seen["resume"] == {"approved": True}
+    assert str(seen["thread_id"]).startswith("eval-") and str(seen["thread_id"]).endswith("-r1")
+
+
+def test_judge_error_is_recorded_in_the_detail() -> None:
+    llm = _FakeQueryRewriteLLM(["acme pricing"])
+
+    results = evaluate_query_rewriter(
+        llm,  # type: ignore[arg-type]
+        "p",
+        judge_llm=_FakeJudge(error=RuntimeError("no API key for judge")),  # type: ignore[arg-type]
+    )
+
+    assert all("judge_error=RuntimeError: no API key for judge" in r.detail for r in results)

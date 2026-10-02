@@ -41,3 +41,5 @@ reports/*
 .claude/worktrees/
 .teamai/*
 docs/superpowers/*
+data/regression_candidates/
+data/.last_prune
