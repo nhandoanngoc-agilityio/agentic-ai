@@ -3,7 +3,7 @@
 Multi-agent LangGraph demo: a supervisor routes between research (RAG), analytics
 (Python stat tools), and reporting (writes markdown via a local MCP filesystem
 server) plus a Gradio chat UI (`gradio_app/`). Architecture details: `docs/architecture.md`. Design specs:
-`docs/superpowers/specs/`, plans: `docs/superpowers/plans/`.
+`docs/superpowers/specs/`, plans: `docs/superpowers/plans/` (local only, git-ignored; never commit them).
 
 ## Commands
 
@@ -12,6 +12,8 @@ source .venv/bin/activate
 pip install -e ".[dev]"                      # or: python scripts/setup_env.py
 pytest                                       # hermetic, no API key needed
 ruff check src tests scripts gradio_app && ruff format --check src tests scripts gradio_app
+basedpyright                                 # type check; fails only on errors not in .basedpyright/baseline.json
+pytest --cov                                 # coverage report; fails under 93%
 python scripts/seed_vectorstore.py           # rebuild Chroma index from data/raw/
 python scripts/run_graph_cli.py "<objective>" [--thread-id id]   # REAL LLM CALLS
 python scripts/run_gradio.py                 # launches the Gradio UI
@@ -53,6 +55,10 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
 - Config is `config.py` (pydantic-settings). Read `.env.example` for keys; never
   open `.env`.
 - Ruff: line length 100, rules E/F/I/UP. A hook auto-formats edited `.py` files.
+- Types: `basedpyright` in basic mode (`[tool.pyright]`, also read by Pylance). Existing errors
+  live in `.basedpyright/baseline.json`; new code must not add any. After fixing old ones, run
+  `basedpyright --writebaseline` and commit the smaller baseline. Never regenerate it to hide
+  a new error.
 - Hermetic MCP tests use the SDK's in-process client session (see
   `tests/mcp/test_mcp_server.py`), not a subprocess.
 

@@ -7,6 +7,9 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Env / secrets
 .env
@@ -27,6 +30,11 @@ data/cache.sqlite-wal
 data/audit.jsonl
 data/eval_results/*
 !data/raw/.gitkeep
+# The synthetic sample corpus is committed so a fresh clone can seed the index.
+# Listed by name: anything else dropped into data/raw/ (real documents) stays ignored.
+!data/raw/competitor_acme.md
+!data/raw/competitor_globex.md
+!data/raw/market_overview.md
 !data/processed/.gitkeep
 !data/vectorstore/.gitkeep
 !data/eval_results/.gitkeep
@@ -39,7 +47,7 @@ reports/*
 
 .claude/settings.local.json
 .claude/worktrees/
-.teamai/*
+.teamai/
 docs/superpowers/*
 data/regression_candidates/
 data/.last_prune

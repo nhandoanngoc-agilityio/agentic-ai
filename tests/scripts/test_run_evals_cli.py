@@ -236,18 +236,20 @@ def test_langsmith_step_runs_inside_the_scoped_run_dir(cli, monkeypatch):
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2-test")
     seen: dict = {}
 
-    def fake_langsmith(provider, *, judge_llm=None):
+    def fake_langsmith(provider, *, judge_llm=None, repeats=1):
         seen["audit"] = settings.audit_log_path
         seen["judge_llm"] = judge_llm
+        seen["repeats"] = repeats
         return []
 
     monkeypatch.setattr(run_evals, "run_langsmith_eval", fake_langsmith)
     monkeypatch.setattr(run_evals, "get_chat_model", lambda *a, **k: "judge")
 
-    run_evals.main([*base, "--langsmith"])
+    run_evals.main([*base, "--langsmith", "--repeats", "3"])
 
     assert str(seen["audit"]).startswith(str(tmp_path / "results"))
     assert seen["judge_llm"] == "judge"
+    assert seen["repeats"] == 3  # LangSmith judging averages the same repeats
 
 
 def test_results_json_records_the_evaluated_providers_manifest(cli, monkeypatch):
@@ -279,7 +281,7 @@ def test_langsmith_key_in_dotenv_passes_the_prereq_check(cli, monkeypatch):
     monkeypatch.setattr(settings, "langsmith_api_key", "lsv2-from-dotenv")
     called: dict = {}
 
-    def fake_langsmith(provider, *, judge_llm=None):
+    def fake_langsmith(provider, *, judge_llm=None, repeats=1):
         called["yes"] = True
         return []
 

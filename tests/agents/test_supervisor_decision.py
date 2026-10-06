@@ -190,3 +190,60 @@ def test_forces_reporting_once_the_visit_cap_is_reached_and_analytics_is_done() 
     result = decide_next_step(state, _ExplodingLLM())  # type: ignore[arg-type]
 
     assert result == "reporting"
+
+
+class _FocusedDecision:
+    def __init__(self, next_step: str, focus: str | None) -> None:
+        self.next = next_step
+        self.research_focus = focus
+
+
+class _CapturingFocusLLM:
+    """Returns a fixed decision with a focus and records the prompt it saw."""
+
+    def __init__(self, next_step: str, focus: str | None) -> None:
+        self._decision = _FocusedDecision(next_step, focus)
+        self.messages: list[object] = []
+
+    def with_structured_output(self, _schema: object) -> "_CapturingFocusLLM":
+        return self
+
+    def invoke(self, messages: list[object], config: object = None) -> _FocusedDecision:
+        self.messages = messages
+        return self._decision
+
+
+def test_hand_back_to_research_carries_the_named_gap() -> None:
+    from market_research_team.agents.supervisor.router import decide_route
+
+    llm = _CapturingFocusLLM("research", "  Globex churn  ")
+    route = decide_route(_state(research_findings=[_FINDING]), llm)  # type: ignore[arg-type]
+
+    assert route.next == "research"
+    assert route.research_focus == "Globex churn"
+    # The supervisor sees what was found, not only a count, so it can name a gap.
+    assert "<findings_summary>\n- [x] y\n</findings_summary>" in llm.messages[1].content
+
+
+def test_focus_is_dropped_when_not_routing_to_research() -> None:
+    from market_research_team.agents.supervisor.router import decide_route
+
+    llm = _CapturingFocusLLM("analytics", "stray focus")
+    route = decide_route(_state(research_findings=[_FINDING]), llm)  # type: ignore[arg-type]
+
+    assert route == ("analytics", None)
+
+
+def test_exhausted_research_is_not_offered_again() -> None:
+    state = _state(research_findings=[_FINDING], analytics_results=[_RESULT])
+    state["research_exhausted"] = True
+
+    # Only analytics/reporting remain; an LLM that still says research is clamped.
+    assert decide_next_step(state, _FakeLLM("research")) == "analytics"  # type: ignore[arg-type]
+
+
+def test_exhausted_research_with_one_option_left_skips_the_llm() -> None:
+    state = _state(research_findings=[_FINDING])
+    state["research_exhausted"] = True
+
+    assert decide_next_step(state, _ExplodingLLM()) == "analytics"  # type: ignore[arg-type]

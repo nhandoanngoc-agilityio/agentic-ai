@@ -331,7 +331,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.langsmith:
                 with scoped_eval_run(run_dir / provider / "langsmith"):
-                    summaries = run_langsmith_eval(provider, judge_llm=judge_llm)  # type: ignore[arg-type]
+                    summaries = run_langsmith_eval(
+                        provider,
+                        judge_llm=judge_llm,  # type: ignore[arg-type]
+                        repeats=args.repeats,
+                    )
                 _print_langsmith_report(summaries)
                 metrics = apply_langsmith_quality(metrics, summaries)
 

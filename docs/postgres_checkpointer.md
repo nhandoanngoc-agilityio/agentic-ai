@@ -16,6 +16,8 @@ object.
 
 ```bash
 brew install postgresql@16
+# postgresql@16 is keg-only: its pg_ctl/createdb/psql aren't on PATH by default.
+export PATH="$(brew --prefix postgresql@16)/bin:$PATH"
 
 # Start it for this session only (not as a persistent background service,
 # so teardown is a clean stop rather than un-registering a launch agent):
@@ -38,15 +40,24 @@ createdb market_research_verify
 ### 3. Install the `prod` extra
 
 ```bash
-pip install -e ".[dev,prod]"   # adds langgraph-checkpoint-postgres + psycopg
+pip install -e ".[dev,prod]"      # venv made with `python -m venv`
+uv pip install -e ".[dev,prod]"   # venv made with `uv venv` (it has no pip of its own)
+python -c "import psycopg, psycopg_pool, langgraph.checkpoint.postgres; print('ok')"
 ```
+
+Adds `langgraph-checkpoint-postgres`, `psycopg` and `psycopg-pool`. If the app later logs
+`No module named 'langgraph.checkpoint.postgres'`, they went into a different environment.
 
 ### 4. Point at it and run the integration test
 
 ```bash
 export DATABASE_URL="postgresql://$(whoami)@localhost:5432/market_research_verify"
-pytest tests/checkpointing/test_checkpointing_postgres.py -v
+pytest tests/checkpointing/test_checkpointing_postgres.py -v -rs
 ```
+
+Export it in the shell: the test checks the shell environment to decide whether to run. If you
+put it in `.env` instead, write the username out (`postgresql://alice@localhost:5432/...`);
+`.env` doesn't run `$(whoami)`.
 
 This test mirrors `tests/checkpointing/test_checkpointing.py` (the SQLite equivalent):
 it builds a real compiled graph with `get_checkpointer()`, runs it through
@@ -83,24 +94,23 @@ setup is production-ready. Before pointing this at a real deployment:
 - **Require TLS.** Add `sslmode=require` (or `verify-full` with a CA
   bundle) to the connection string — most managed providers enforce this
   by default, but a self-hosted or bring-your-own-VM Postgres won't.
-- **Pool connections.** `PostgresSaver.from_conn_string()` opens one
-  direct `psycopg` connection per process. Multiple app instances/workers
-  will exhaust `max_connections` fast — front it with PgBouncer, or use
-  the provider's built-in pooler (RDS Proxy, Neon's pooler, etc.).
+- **Pool connections.** Each process holds one shared `PostgresSaver` over a
+  `psycopg_pool.ConnectionPool` of 1–4 connections (`_POSTGRES_POOL_*_SIZE` in
+  `checkpointing/store.py`). Many app instances/workers can still exhaust
+  `max_connections` — front it with PgBouncer, or use the provider's built-in
+  pooler (RDS Proxy, Neon's pooler, etc.).
 - **Treat `checkpointer.setup()` as a migration, not a boot step.** It
   runs `CREATE TABLE IF NOT EXISTS` DDL. Calling it from every app
   instance on every startup is fine for a single local process, but in a
   multi-instance deployment it should run once, from a controlled deploy
   step, using a role with DDL privileges — the running app should use a
   separate, lower-privileged role that can only read/write rows.
-- **Plan for table growth.** Every graph step writes a new checkpoint row;
-  nothing in this project prunes old ones. Add a retention job (e.g.
-  delete checkpoints older than N days per thread) before this runs
-  unattended for any length of time.
-- **Close the connection on shutdown.** `_build_postgres_checkpointer`
-  currently calls `PostgresSaver.from_conn_string(url).__enter__()` and
-  keeps the object for the life of the process, but nothing ever calls the
-  matching `__exit__()`. That's harmless for a short CLI invocation (the
-  process exit reclaims the socket) but should be wired into a graceful
-  shutdown handler for a long-running server process so the connection
-  closes cleanly instead of being dropped by the OS.
+- **Table growth.** Every graph step writes a new checkpoint row. The
+  retention prune (`feedback/retention.py`, `AUDIT_RETENTION_DAYS`) deletes
+  threads older than the window at app start; see `docs/security.md`.
+- **Shutdown.** The pool is closed by an `atexit` hook
+  (`checkpointing.store.close_checkpointer`), which runs on a normal exit and
+  on Ctrl-C. Python skips `atexit` on an unhandled SIGTERM or SIGKILL, so a
+  server deployed behind a process manager should turn SIGTERM into a normal
+  exit (or call `close_checkpointer()` itself); otherwise Postgres reclaims the
+  dropped connections on its own.

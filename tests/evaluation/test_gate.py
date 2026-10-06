@@ -224,3 +224,17 @@ def test_unjudged_cases_produce_a_warning(config):
     )
 
     assert any("unjudged" in w and "judge_error" in w for w in report.warnings)
+
+
+def test_committed_gate_prices_every_default_agent_model() -> None:
+    """A provider whose default model has no price makes `run_evals.py` exit 2
+    before spending anything -- which is what the default Anthropic path did
+    when its price entry was commented out."""
+
+    from market_research_team.config import Settings
+    from market_research_team.evaluation.metrics import require_price
+
+    config = load_gate_config(Path(__file__).parents[2] / "evals" / "gate.toml")
+    defaults = Settings.model_fields
+    for model in (defaults["anthropic_model"].default, defaults["openai_model"].default):
+        assert require_price(config.prices, model).input_per_mtok > 0

@@ -1,9 +1,9 @@
 """Full-graph regression test for the comparison UI's "discard" outcome.
 
-The existing interrupt tests (tests/test_reporting_node_interrupt.py) build an
-ad-hoc `START -> reporting -> END` single-node graph, so they can never see what
-the supervisor does *after* `reporting_node` returns. The real graph is cyclic
-(`supervisor -> reporting -> supervisor -> ...`), and a discard that sets neither
+The interrupt tests (tests/agents/test_reporting_node_interrupt.py) build an
+ad-hoc `START -> reporting <-> report_review -> END` graph, so they can never see
+what the supervisor does *after* the review returns. The real graph is cyclic
+(`supervisor -> reporting -> report_review -> supervisor -> ...`), and a discard that sets neither
 `report_path` nor `error` used to send the supervisor straight back to Reporting,
 which redrafted and interrupted again -- forever.
 
@@ -28,6 +28,7 @@ from market_research_team.state import AgentState, AnalyticsResult, ResearchFind
 
 def _fake_research_pipeline(
     objective: str,
+    focus: str | None = None,
 ) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     return (
         [{"source": "mock", "content": f"finding for {objective}", "relevance_score": 0.9}],

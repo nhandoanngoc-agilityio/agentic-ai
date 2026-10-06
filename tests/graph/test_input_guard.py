@@ -7,6 +7,7 @@ import pytest
 
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.agents.supervisor import router as supervisor_router_module
+from market_research_team.agents.supervisor.router import SupervisorRoute
 from market_research_team.config import settings
 from market_research_team.graph import run_graph
 from market_research_team.state import AgentState
@@ -62,7 +63,9 @@ def test_rejected_run_is_audited() -> None:
 
 def test_valid_objective_is_normalised_and_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
     # Research is stubbed to explode, so have the supervisor end the run at once.
-    monkeypatch.setattr(supervisor_router_module, "run_supervisor_decision", lambda state: "FINISH")
+    monkeypatch.setattr(
+        supervisor_router_module, "run_supervisor_decision", lambda state: SupervisorRoute("FINISH")
+    )
 
     result = run_graph(_initial_state("  Assess Acme vs Globex\x00 pricing strategy  "))
 

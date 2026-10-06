@@ -2,12 +2,15 @@
 
 Runs the compiled graph in-process via `run_graph`/`Command(resume=...)`,
 the same pattern `scripts/run_graph_cli.py` uses for the CLI — no separate
-API server. See `docs/superpowers/specs/2026-09-22-gradio-frontend-design.md`.
+API server.
 """
 
+import queue
+import threading
 import uuid
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import gradio as gr
 from langgraph.types import Command
@@ -17,11 +20,19 @@ from gradio_app.charts import build_comparison_figure
 from gradio_app.regressions_tab import add_regressions_tab
 from market_research_team.config import settings
 from market_research_team.feedback.candidates import scrub_text
-from market_research_team.graph import run_graph
+from market_research_team.graph import StepCallback, run_graph
 from market_research_team.observability import record_feedback_score
 from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
+
+T = TypeVar("T")
+
+# Shown for nodes whose update carries no message of its own.
+_STEP_LABELS = {
+    "input_guard": "Objective checked.",
+    "reporting": "Report drafted and run through the output checks.",
+}
 
 
 def _initial_state(objective: str) -> AgentState:
@@ -49,7 +60,7 @@ def _render_result_turn(result: AgentState) -> str:
 
 
 def _render_interrupt_turn(payload: dict[str, Any]) -> str:
-    """Render `reporting_node`'s `interrupt()` payload for the approval turn.
+    """Render `report_review_node`'s `interrupt()` payload for the approval turn.
 
     Surfaces the filename, review round, and (most importantly) any
     guardrail warnings alongside the draft content, so the human approves
@@ -68,20 +79,89 @@ def _render_interrupt_turn(payload: dict[str, Any]) -> str:
     return turn
 
 
+def describe_step(node: str, update: dict[str, Any]) -> str:
+    """One progress line for a finished node: its own message when it has one
+    (e.g. "Research complete: 4 queries, ..."), else a short label."""
+
+    messages = update.get("messages") or []
+    content = str(getattr(messages[-1], "content", "") or "") if messages else ""
+    if content:
+        return content
+    if update.get("error"):
+        return f"{node} failed: {update['error']}"
+    return _STEP_LABELS.get(node, f"{node} finished.")
+
+
+def run_with_progress(run: Callable[[StepCallback], T]) -> Iterator[tuple[list[str], T | None]]:
+    """Run `run(on_step)` on one worker thread and yield `(steps, None)` after
+    each node, then `(steps, result)` once it returns.
+
+    One thread for the whole run, rather than letting Gradio step a generator
+    across its thread pool, keeps per-thread context (Langfuse tracing, the
+    audit thread id) intact for the run's duration.
+    """
+
+    events: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+    def on_step(node: str, update: dict[str, Any]) -> None:
+        events.put(("step", describe_step(node, update)))
+
+    def worker() -> None:
+        try:
+            events.put(("done", run(on_step)))
+        except BaseException as exc:
+            events.put(("error", exc))
+
+    threading.Thread(target=worker, name="gradio-graph-run", daemon=True).start()
+    steps: list[str] = []
+    while True:
+        kind, payload = events.get()
+        if kind == "step":
+            steps.append(payload)
+            yield steps, None
+        elif kind == "done":
+            yield steps, payload
+            return
+        else:
+            raise payload
+
+
+def progress_turn(steps: list[str], *, running: bool) -> dict[str, Any]:
+    """The chat turn listing a run's steps: live while running, kept afterwards."""
+
+    title = "**Working…**" if running else "**Run steps**"
+    lines = "\n".join(f"- {step}" for step in steps) or "- Starting…"
+    return {"role": "assistant", "content": f"{title}\n\n{lines}"}
+
+
+def with_steps(history: list[dict[str, Any]], steps: list[str]) -> list[dict[str, Any]]:
+    """Insert the finished step list just before the run's final turn."""
+
+    if not steps or not history:
+        return history
+    return [*history[:-1], progress_turn(steps, running=False), history[-1]]
+
+
+def decision_turn(decision: dict[str, Any]) -> dict[str, Any]:
+    return {"role": "user", "content": f"Decision: {decision}"}
+
+
 def submit_objective(
     objective: str,
     history: list[dict[str, Any]],
     thread_id: str | None,
     compiled_graph: Any,
+    on_step: StepCallback | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None, Figure | None, bool, str, bool]:
     """Run the graph for a fresh objective and render the outcome.
 
     Returns `(new_history, thread_id, pending_interrupt, chart_figure,
     approval_row_visible, objective, run_concluded)`. `pending_interrupt` is
-    the raw `interrupt()` payload from `reporting_node` when the run paused
+    the raw `interrupt()` payload from `report_review_node` when the run paused
     for approval, else `None`. `run_concluded` is true whenever the run
     reached an end state (success, discard, or error) rather than pausing
-    for approval -- used to show the satisfaction rating row.
+    for approval -- used to show the satisfaction rating row. `on_step` is
+    passed to `run_graph` to report progress (see `run_with_progress`).
     """
 
     # Every call to `submit_objective` starts a brand-new run: always mint a
@@ -107,6 +187,7 @@ def submit_objective(
             _initial_state(objective),
             compiled_graph=compiled_graph,
             thread_id=thread_id,
+            on_step=on_step,
         )
     except Exception as exc:
         new_history.append({"role": "assistant", "content": f"**Run failed:** {exc}"})
@@ -130,16 +211,17 @@ def resolve_interrupt(
     history: list[dict[str, Any]],
     thread_id: str,
     compiled_graph: Any,
+    on_step: StepCallback | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, Figure | None, bool, bool]:
     """Resume a paused run with a human approval/rejection decision.
 
-    `decision` matches the shape `reporting_node`'s `interrupt()` expects:
+    `decision` matches the shape `report_review_node`'s `interrupt()` expects:
     `{"approved": True}`, `{"approved": False, "feedback": "..."}`, or
     `{"discard": True}`. `run_concluded` (see `submit_objective`) is the
     last element.
     """
 
-    new_history = [*history, {"role": "user", "content": f"Decision: {decision}"}]
+    new_history = [*history, decision_turn(decision)]
     # Same event the CLI writes: reviewer corrections feed the failure harvester.
     audit.record("human_decision", thread_id, decision=decision)
 
@@ -148,6 +230,7 @@ def resolve_interrupt(
             Command(resume=decision),
             compiled_graph=compiled_graph,
             thread_id=thread_id,
+            on_step=on_step,
         )
     except Exception as exc:
         new_history.append({"role": "assistant", "content": f"**Run failed:** {exc}"})
@@ -236,6 +319,7 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
                     approve_button = gr.Button("Approve", variant="primary")
                     feedback_box = gr.Textbox(label="Feedback (for reject)", scale=3)
                     reject_button = gr.Button("Reject")
+                    discard_button = gr.Button("Discard", variant="stop")
 
                 with gr.Row(visible=False) as rating_row:
                     gr.Markdown("How was this run?")
@@ -268,48 +352,70 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
         interrupt_state = gr.State(None)
         objective_state = gr.State("")
 
+        hidden = gr.update(visible=False)
+
         def on_submit(objective: str, history: list[dict], thread_id: str | None):
-            new_history, new_thread_id, pending, figure, visible, ran_objective, concluded = (
-                submit_objective(objective, history, thread_id, compiled_graph)
-            )
-            return (
-                new_history,
-                new_thread_id,
-                pending,
-                figure,
-                gr.update(visible=visible),
-                "",
-                ran_objective,
-                gr.update(visible=concluded),
-            )
+            # Generator: Gradio re-renders after each yield, so the "Working…"
+            # turn fills in step by step while the run is going.
+            pending_view = [*history, {"role": "user", "content": objective}]
+            for steps, outcome in run_with_progress(
+                lambda on_step: submit_objective(
+                    objective, history, thread_id, compiled_graph, on_step=on_step
+                )
+            ):
+                if outcome is None:
+                    live = [*pending_view, progress_turn(steps, running=True)]
+                    yield live, gr.skip(), None, None, hidden, "", objective, hidden
+                    continue
+                new_history, new_thread_id, pending, figure, visible, ran_objective, concluded = (
+                    outcome
+                )
+                yield (
+                    with_steps(new_history, steps),
+                    new_thread_id,
+                    pending,
+                    figure,
+                    gr.update(visible=visible),
+                    "",
+                    ran_objective,
+                    gr.update(visible=concluded),
+                )
+
+        def resume(decision: dict[str, Any], history: list[dict], thread_id: str):
+            """Shared by Approve / Reject / Discard: resume the paused run with
+            progress. Yields (history, pending, figure, approval_row, rating_row)."""
+
+            pending_view = [*history, decision_turn(decision)]
+            for steps, outcome in run_with_progress(
+                lambda on_step: resolve_interrupt(
+                    decision, history, thread_id, compiled_graph, on_step=on_step
+                )
+            ):
+                if outcome is None:
+                    live = [*pending_view, progress_turn(steps, running=True)]
+                    yield live, None, None, hidden, hidden
+                    continue
+                new_history, pending, figure, visible, concluded = outcome
+                yield (
+                    with_steps(new_history, steps),
+                    pending,
+                    figure,
+                    gr.update(visible=visible),
+                    gr.update(visible=concluded),
+                )
 
         def on_approve(history: list[dict], thread_id: str, _pending: dict | None):
-            new_history, pending, figure, visible, concluded = resolve_interrupt(
-                {"approved": True}, history, thread_id, compiled_graph
-            )
-            return (
-                new_history,
-                pending,
-                figure,
-                gr.update(visible=visible),
-                gr.update(visible=concluded),
-            )
+            yield from resume({"approved": True}, history, thread_id)
+
+        def on_discard(history: list[dict], thread_id: str, _pending: dict | None):
+            yield from resume({"discard": True}, history, thread_id)
 
         def on_reject(history: list[dict], thread_id: str, _pending: dict | None, feedback: str):
-            new_history, pending, figure, visible, concluded = resolve_interrupt(
-                {"approved": False, "feedback": feedback or None},
-                history,
-                thread_id,
-                compiled_graph,
-            )
-            return (
-                new_history,
-                pending,
-                figure,
-                gr.update(visible=visible),
-                "",
-                gr.update(visible=concluded),
-            )
+            decision = {"approved": False, "feedback": feedback or None}
+            for new_history, pending, figure, approval, rating in resume(
+                decision, history, thread_id
+            ):
+                yield new_history, pending, figure, approval, "", rating
 
         def on_rate(thread_id: str | None, objective: str, rating: str):
             record_satisfaction_rating(thread_id, objective, rating)
@@ -338,6 +444,11 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
             on_reject,
             inputs=[chatbot, thread_state, interrupt_state, feedback_box],
             outputs=[chatbot, interrupt_state, chart, approval_row, feedback_box, rating_row],
+        )
+        discard_button.click(
+            on_discard,
+            inputs=[chatbot, thread_state, interrupt_state],
+            outputs=[chatbot, interrupt_state, chart, approval_row, rating_row],
         )
         thumbs_up_button.click(
             lambda thread_id, objective: on_rate(thread_id, objective, "up"),

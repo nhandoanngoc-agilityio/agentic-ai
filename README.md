@@ -29,14 +29,21 @@ a final report to disk via a custom local MCP server.
 
 - **Supervisor Router Node** — LLM-driven routing between sub-agents via
   conditional edges; can hand work back to Research or Analytics, not just
-  march forward, bounded by a visit cap.
+  march forward, bounded by a visit cap. A hand-back to Research names the
+  gap to fill; once a Research pass adds nothing new, Research is no longer
+  offered.
 - **Research Agent Node** — advanced RAG: query rewriting/expansion, vector
-  retrieval, cross-encoder reranking.
+  retrieval, cross-encoder reranking. On a hand-back it searches for the named
+  gap and merges new findings into the existing ones (deduplicated, capped at
+  10); if nothing clears the rerank floor on the first pass, the run ends with
+  an error instead of retrying.
 - **Analytics Agent Node** — tool-calling agent using native Python
   math/stat functions to evaluate metrics; every reported number is backed
   by a real tool call.
-- **Reporting Agent Node** — drafts a markdown report, then calls a custom
-  local MCP server (spawned over stdio) to write it to disk.
+- **Reporting Agent** — two nodes. `reporting` drafts a markdown report and
+  runs the output guardrails; `report_review` pauses on a human-approval
+  interrupt, then calls a custom local MCP server (spawned over stdio) to write
+  that exact draft to disk. A rejection loops back to `reporting` for a redraft.
 
 Every node is wrapped with an error boundary (`guardrails.py`): an
 unexpected failure is recorded into state and ends the run cleanly instead
@@ -63,24 +70,30 @@ src/market_research_team/
 ├── config.py                 # pydantic-settings: model, paths, thresholds
 ├── llm.py                    # chat model factory (LLM_PROVIDER: anthropic | openai)
 ├── guardrails.py             # per-node error-boundary wrapper
+├── observability.py          # optional Langfuse tracing + local token-usage tracking
+├── versioning.py             # agent version = release + fingerprint of prompts/model/tools/limits
+├── async_utils.py            # run an async call (MCP) from a sync node, loop or no loop
 ├── retrieval/                # query rewriting, vector retrieval, cross-encoder reranking
-├── security/                 # input validation at agent boundaries
+├── security/                 # layered guardrails: input validation, output filters, audit log
+├── caching/                  # retrieval / rerank / opt-in response caches (SQLite)
 ├── agents/
-│   ├── supervisor/           # LLM-driven routing + Research/Analytics handoff
-│   ├── research/             # research node (uses retrieval/)
+│   ├── supervisor/           # LLM-driven routing + targeted hand-backs to Research
+│   ├── research/             # research node (uses retrieval/), merges passes
 │   ├── analytics/            # native Python math/stat tool-calling agent
-│   └── reporting/            # drafts report + MCP client wiring
+│   └── reporting/            # draft node + human-review node + MCP client wiring
 ├── ingestion/                # loaders, hierarchical/recursive chunking, index build
 ├── mcp_server/               # local MCP server exposing filesystem write ops
-├── checkpointing/            # SQLite / Postgres checkpointer factory
-└── evaluation/               # golden dataset + offline/LangSmith prompt-eval harness
+├── checkpointing/            # one shared SQLite / Postgres checkpointer per process
+├── evaluation/               # golden dataset, eval harness, LLM judges, release gate
+└── feedback/                 # production failures -> regression candidates, retention
 
-gradio_app/    # Gradio chat UI (Research + Reports tabs), runs the graph in-process
-data/          # raw → processed documents, persisted vector store, checkpoint DB, eval results
+gradio_app/    # Gradio UI (Research, Reports, Regressions tabs), runs the graph in-process
+data/          # raw documents (sample corpus committed), vector store, checkpoints, eval results
+evals/         # release gate config, approved baseline, curated regression cases (committed)
 reports/       # markdown reports written by the MCP server
-scripts/       # setup_env.py, seed_vectorstore.py, run_graph_cli.py, run_evals.py, run_gradio.py
+scripts/       # setup, seeding, CLI, Gradio, evals, manifest, harvest/promote/prune
 tests/         # pytest suite, grouped by area (agents/, retrieval/, evaluation/, graph/, ...)
-docs/          # architecture notes, design specs and plans under docs/superpowers/
+docs/          # architecture log, security, Postgres guide (design specs/plans stay local)
 CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); config in .claude/
 ```
 
@@ -108,18 +121,48 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 | Focus |
 |---|
 | Final documentation pass + step-by-step run instructions |
-| GitLab CI: automated `ruff` + `pytest` on every push (currently disabled — see [Known limitations](#known-limitations)) |
 | Live end-to-end validation against real API credentials (Anthropic and OpenAI) |
 | Config-driven LLM provider (`LLM_PROVIDER=anthropic\|openai`) instead of a hardcoded model |
 | Prompt evaluation regression suite: golden dataset + real-LLM harness, distinct from the hermetic `pytest` suite |
 | `scripts/setup_env.py`: one-shot install + fail-fast environment validation |
 
+### Later — Operating it in production
+| Focus |
+|---|
+| Gradio UI replacing the Next.js frontend: run, approve/reject, browse reports, rate runs |
+| Layered guardrails (input, retrieval, tool, output, policy) with an audit log ([docs/security.md](docs/security.md)) |
+| Retrieval, rerank and opt-in response caching with safe-caching rules |
+| Langfuse tracing; agent versioning stamped on traces, audit lines and eval results |
+| Release gate: thresholds, tolerances and an approved per-provider baseline (`evals/`) |
+| Feedback loop: production failures harvested into regression candidates, promoted by a person |
+| 90-day retention for the audit log and checkpoints, harvesting first |
+| Reporting split into draft + review nodes, so the approved draft is exactly what gets written |
+| Targeted re-research: the supervisor names the gap, Research merges passes, dead loops stop |
+| One shared, pooled checkpointer per process, closed at exit |
+
 ## Results
 
 Verified against this repo's current state, not aspirational:
 
-- **Test suite**: 157 `pytest` tests passing (1 skipped), `ruff check src tests scripts` clean — hermetic,
-  no API key or seeded vector store required.
+- **Test suite (2026-10-05)**: 515 `pytest` tests: 512 pass, and the 3 live-Postgres tests skip
+  unless `DATABASE_URL` points at a running server. `ruff check` and `ruff format --check` are
+  clean over `src tests scripts gradio_app`. Hermetic: no API key or seeded vector store required.
+- **Postgres checkpointer (2026-10-05)**: with `DATABASE_URL` pointing at a local Postgres, all
+  11 `tests/checkpointing` tests pass, including the 3 live ones: the real graph saves its
+  checkpoints to Postgres, resumes through the approval interrupt, and keeps threads separate.
+- **Release gate, approved baseline (2026-10-06)**: `run_evals.py --provider openai --langsmith
+  --repeats 3`, agent version `0.1.0+b6428b4bd1cc` (`gpt-4o-mini`, judge `gpt-5.4-mini`). Gate
+  passed: task success 1.0, safety 1.0, tool accuracy 1.0, judged quality 0.892 averaged over
+  21 judged rows (analytics 1.00, supervisor 0.96, full pipeline 0.90, reporting 0.86, query
+  rewrite 0.79), p95 latency 27 s, about $0.0004 per run. Both regression cases pass in all
+  3 repeats. Recorded in `evals/baseline.json`.
+  Query rewriting rose from 0.48 (2026-10-05) after the rewriter was told to give each query
+  its own facet and one company, instead of restating "X vs Y" comparisons that no document
+  matches. Baselines before 2026-10-05 (0.83–0.85) came from a single judged sample per case,
+  before `--repeats` reached the LangSmith judge, so they aren't comparable.
+
+Earlier live runs, kept for the record (agent versions before versioning existed):
+
 - **Live end-to-end run** (real OpenAI credentials, `gpt-5-mini`, objective *"Assess Acme vs Globex
   pricing strategy and recommend a competitive positioning"*): completed in one pass via
   `scripts/run_graph_cli.py` — 5 research findings gathered across 3 Research Agent visits, 7
@@ -149,7 +192,7 @@ Verified against this repo's current state, not aspirational:
   graph ended cleanly with `report_path: None` instead of crashing. Re-run
   `LLM_PROVIDER=anthropic python scripts/run_graph_cli.py "..."` once `ANTHROPIC_API_KEY` is set.
 
-- **Prompt evaluation regression suite** (`python scripts/run_evals.py`, real OpenAI credentials):
+- **First prompt evaluation run** (`python scripts/run_evals.py`, real OpenAI credentials):
   7/7 cases passed. Notably `analytics/globex_acv_range` — the model called 7 real statistics
   tools, and every reported figure (min $150K, max $400K, mean $275K, range $250K) traced back to
   the source text rather than being invented, which is exactly the class of regression this suite
@@ -169,7 +212,7 @@ pip install -e ".[dev]"
 cp .env.example .env                 # then set ANTHROPIC_API_KEY (or LLM_PROVIDER=openai + OPENAI_API_KEY)
 python scripts/setup_env.py --skip-install   # validates packages + the key your provider needs
 python scripts/seed_vectorstore.py   # builds data/vectorstore/ from data/raw/
-pytest -q                            # 157 tests, no API key needed
+pytest -q                            # hermetic: no API key, no network
 python scripts/run_graph_cli.py "Assess Acme vs Globex pricing strategy"   # real LLM calls
 ```
 
@@ -193,6 +236,18 @@ pip install -e ".[dev]"
 This installs the runtime dependencies plus `pytest`, `ruff`, and
 `langgraph-cli` (for `langgraph dev` / Studio). To also exercise the
 Postgres checkpointer, add the `prod` extra: `pip install -e ".[dev,prod]"`.
+
+**Using [uv](https://docs.astral.sh/uv/) instead** (the repo commits `uv.lock`):
+
+```bash
+uv venv --python 3.11 .venv && source .venv/bin/activate
+uv pip install -e ".[dev]"           # or ".[dev,prod]"
+```
+
+A venv created by `uv` has no `pip` of its own, so a plain `pip install` inside it silently
+uses whichever `pip` is first on `PATH` (often the system one) and the packages never reach
+`.venv`. In a `uv` venv, always install with `uv pip install`. A symptom of getting this wrong:
+`No module named 'langgraph.checkpoint.postgres'` with `DATABASE_URL` set.
 
 ### 2. Configure environment
 
@@ -230,10 +285,16 @@ under `data/processed/`). Re-run it any time you add or change files in
 
 ```bash
 pytest
-ruff check src tests scripts
+ruff check src tests scripts gradio_app
+basedpyright        # type check against .basedpyright/baseline.json
+pytest --cov        # coverage report (94% when adopted; fails under 93%)
 ```
 
-The test suite (157 tests) is hermetic — LLM calls and the vector store are
+`basedpyright` runs in basic mode from `[tool.pyright]` in `pyproject.toml`, which VS Code's
+Pylance also reads. The ~230 errors that existed when it was adopted are recorded in
+`.basedpyright/baseline.json` and fixed over time; the command fails only on new ones.
+
+The test suite (513 tests) is hermetic — LLM calls and the vector store are
 faked or run against real-but-local fixtures, so `pytest` doesn't require an
 API key or the seeded vector store from step 3. The MCP server tests
 (`tests/mcp/test_mcp_server.py`) use the SDK's in-process client session, so
@@ -243,7 +304,7 @@ stdio and writes a real file to a temp dir, and `test_checkpointing.py` runs a
 real SQLite round-trip — no network or API key needed for any of it.
 
 ```bash
-ruff format --check src tests scripts   # formatting, same check CI would run
+ruff format --check src tests scripts gradio_app   # formatting
 ```
 
 ### 5. Run the graph
@@ -266,15 +327,17 @@ What happens during a run:
    rejected before any LLM call.
 2. The supervisor routes between Research (RAG over the seeded index), Analytics (Python stat
    tools), and Reporting until it decides to FINISH, bounded by a visit cap and the recursion
-   limit.
+   limit. A hand-back to Research names the information still missing; an objective the
+   documents can't answer ends after one Research pass with a "no relevant material" error.
 3. Before the report is written, the Reporting Agent interrupts and prints the draft. Answer `y`
    to approve, or `n` plus optional feedback to request a redraft (up to the configured number of
    review rounds).
 4. On approval, the report is written through the local MCP filesystem server to `reports/`
    (or `REPORTS_DIR`).
 
-Re-running with the same `--thread-id` resumes from the SQLite checkpoint instead of starting
-over. Every run spends real API money — the test suite does not.
+Re-running with the same `--thread-id` resumes from the checkpoint (SQLite by default,
+Postgres when `DATABASE_URL` is set; see [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md))
+instead of starting over. Every run spends real API money — the test suite does not.
 
 **Option B — LangGraph Studio:**
 
@@ -326,12 +389,34 @@ python scripts/run_evals.py                  # current LLM_PROVIDER
 python scripts/run_evals.py --provider openai
 python scripts/run_evals.py --compare         # anthropic AND openai, side by side
 python scripts/run_evals.py --langsmith       # also run LangSmith dataset sync + LLM-judge experiments
+python scripts/run_evals.py --repeats 3       # release check, ~3x the cost
 ```
 
-Exits non-zero if any case fails, and writes a timestamped JSON report to
-`data/eval_results/`. The full-pipeline case needs the vector store seeded
-(step 3 above). See `src/market_research_team/evaluation/golden_dataset.py`
-to add cases.
+Categories: query_rewrite, retrieval, supervisor_decision, analytics, tool_selection,
+reporting, full_pipeline, safety, and regression (curated production failures, see
+[Production feedback loop](#production-feedback-loop)). A timestamped JSON report goes to
+`data/eval_results/<run id>/results.json`. The full-pipeline case needs the vector store seeded
+(step 3 above). See `src/market_research_team/evaluation/golden_dataset.py` to add cases.
+
+### Release gate
+
+Every run ends with a gate verdict per provider: task success, judged quality, tool accuracy,
+safety (must be 100%), p95 latency and cost per run, checked against absolute floors and
+against the last approved baseline for that provider.
+
+- `evals/gate.toml` holds the thresholds, tolerances, the pinned judge model and per-model
+  prices. A model without a price stops the run before it spends anything.
+- `evals/baseline.json` holds the approved metrics per provider, stamped with the agent version.
+  Only `run_evals.py --repeats 3 --update-baseline` writes it, and only if the gate passed;
+  committing it is the promotion.
+- Exit codes: `0` gate passed, `1` gate failed, `2` config or prerequisite error.
+- Compare like with like: a baseline approved with `--langsmith` should be re-checked with
+  `--langsmith`, or the quality numbers come from a different judge (the gate warns).
+- `--repeats N` applies to the LangSmith judge as well (`num_repetitions`), so judged quality
+  is an average of N samples per case. With one sample, a single judge call could move overall
+  quality by about 0.05, the whole tolerance.
+- `python scripts/show_agent_manifest.py` prints the current agent version and what it is made
+  of, with no LLM calls.
 
 `--langsmith` requires `LANGSMITH_API_KEY` (see [Configuration](#configuration)). It layers
 LLM-judge scoring on top of — not instead of — the deterministic checks above: each of the 5
@@ -343,26 +428,47 @@ depending on category). See `src/market_research_team/evaluation/langsmith_eval.
 ## Gradio UI
 
 A Gradio chat app (`gradio_app/`) that runs the graph in-process — no separate `langgraph dev`
-deployment required. Install the `ui` extra and launch it:
+deployment required. Gradio is a core dependency, so the step 1 install is enough:
 
 ```bash
-pip install -e ".[dev,ui]"
 python scripts/run_gradio.py
 ```
 
-Open the printed local URL (typically `http://127.0.0.1:7860`). It has two tabs:
+Open the printed local URL (typically `http://127.0.0.1:7860`). It has three tabs:
 
 - **Research** — submit an objective and watch the graph run against the configured
-  `LLM_PROVIDER`. The Reporting Agent's draft pauses for human approval exactly as it does for
-  the CLI (`scripts/run_graph_cli.py`); Approve/Reject buttons resume the same in-process run via
-  `Command(resume=...)` on the paused thread, with an optional feedback field driving a redraft on
-  reject. Per-entity comparison charts are built from the run's analytics results once it
+  `LLM_PROVIDER`: a "Working…" turn lists each step as it finishes (objective checked, research
+  counts, analytics, routing), and stays in the chat as "Run steps" afterwards. The Reporting
+  Agent's draft pauses for human approval exactly as it does for the CLI
+  (`scripts/run_graph_cli.py`); Approve, Reject and Discard resume the same in-process run via
+  `Command(resume=...)` on the paused thread. Reject takes optional feedback for a redraft;
+  Discard ends the run without writing a report. Per-entity comparison charts are built from the run's analytics results once it
   finishes.
+  After a run ends, a thumbs up/down rating is recorded for the feedback loop.
 - **Reports** — browse markdown reports already written to `reports/` (or `REPORTS_DIR`).
+- **Regressions** — harvest production failures into candidates, review them, and promote or
+  reject each one (the same actions as `scripts/promote_case.py`).
 
 Because the app calls `build_production_graph(get_checkpointer())` and `run_graph()` directly in
 the same process (the same pattern as `run_graph_cli.py`), it needs only the one provider key that
 pattern already requires — no dual-port setup, no `LLM_PROVIDER` juggling.
+
+## Production feedback loop
+
+Failures seen in real use become regression cases the release gate runs, with a person in the
+middle:
+
+```bash
+python scripts/harvest_failures.py --since 7d     # thumbs-down, rejections, errors, blocked inputs -> candidates (free)
+python scripts/promote_case.py list               # review candidates in data/regression_candidates/ (git-ignored)
+python scripts/promote_case.py promote <id>       # -> evals/regressions.jsonl (committed), runs as `regression`
+python scripts/prune_data.py                      # retention dry run; --apply deletes
+```
+
+Candidates are scrubbed of PII and secrets, and promotion refuses anything that still matches.
+Nothing is promoted automatically. The audit log and checkpoints are kept for
+`AUDIT_RETENTION_DAYS` (90) and pruned at most daily when the app or CLI starts, after failures
+in them are harvested. Details: [docs/security.md](docs/security.md#retention).
 
 ## Configuration
 
@@ -382,8 +488,12 @@ and can be overridden via `.env` or real environment variables. From
 | `DATABASE_URL` | unset | If set, `get_checkpointer()` uses Postgres instead of the local SQLite file |
 | `RERANK_SCORE_FLOOR` | `-8.0` | Cross-encoder logit below which retrieved chunks are dropped |
 | `AUDIT_LOG_PATH` | `./data/audit.jsonl` | Append-only JSONL audit log of finished runs and human decisions |
+| `AUDIT_RETENTION_DAYS` / `AUTO_PRUNE_ENABLED` | `90` / `true` | Retention window for the audit log and checkpoints; daily auto-prune at startup |
+| `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` | unset | Pinned sampling parameters (provider default when unset); part of the agent version |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | unset | Optional Langfuse tracing; a no-op unless both keys are set |
 
-Other tunables (`anthropic_model` / `openai_model` names, embedding/reranker
+Other tunables (`anthropic_model` / `openai_model` names, defaults `claude-sonnet-5-5` /
+`gpt-4o-mini`, embedding/reranker
 model names, chunk sizes, recursion limit, checkpoint DB path) have
 sensible defaults in `config.py` and are generally not something you need
 to touch to run the demo. Every node builds its LLM through
@@ -398,7 +508,8 @@ to touch to run the demo. Every node builds its LLM through
 | [docs/architecture.md](docs/architecture.md) | Design log: layout decisions and the 2026-09 restructure |
 | [docs/security.md](docs/security.md) | Guardrails per layer, what is deliberately absent, data handling |
 | [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md) | Standing up Postgres locally and what changes for production |
-| [docs/superpowers/specs/](docs/superpowers/specs/), [docs/superpowers/plans/](docs/superpowers/plans/) | Design specs and implementation plans per feature |
+| [docs/gradio_manual_test.md](docs/gradio_manual_test.md) | Manual test scenarios for the Gradio app, with inputs and expected results |
+| `docs/superpowers/` (local only, git-ignored) | Working design specs and implementation plans; decisions that matter are summarized in `docs/architecture.md` |
 | [gradio_app/](gradio_app/) | Gradio UI source — Research/Reports tabs, submit/approve/reject handlers |
 | [CLAUDE.md](CLAUDE.md) | Conventions enforced in code, cost rules, agent/skill delegation for Claude Code |
 | [.env.example](.env.example) | Every environment variable with a comment |
@@ -407,16 +518,22 @@ to touch to run the demo. Every node builds its LLM through
 
 Honest gaps, not hidden:
 
-- **GitLab CI is currently switched off.** `.gitlab-ci.yml` was emptied on 2026-09-14 (commit
-  `3fcc1fa`) while eval work was in progress and has not been restored. The previous pipeline ran
-  `ruff check` and `pytest -q` on `python:3.11-slim`; `git show 3fcc1fa^:.gitlab-ci.yml` recovers
-  it. Until then, run `pytest` and `ruff` locally before pushing.
+- **GitLab CI is switched off.** The test job ran out of disk on the GitLab runner while
+  installing dependencies, so `.gitlab-ci.yml` was emptied on 2026-10-02 (`aa00df4`). Restore it
+  with `git show 6143b86:.gitlab-ci.yml > .gitlab-ci.yml` once the runner has space. Until then,
+  run `pytest` and `ruff` locally before pushing. Even with CI on, the real-LLM release gate
+  stays a manual step: it costs money and needs API keys.
+- **No Anthropic baseline.** `evals/baseline.json` has an approved baseline for OpenAI only, so
+  an Anthropic eval run gets the absolute checks but no comparison against a baseline. Approving
+  one needs a paid `run_evals.py --provider anthropic --repeats 3 --update-baseline` run.
 
-- **The Postgres checkpointer is unverified against a real database.** `get_checkpointer()`
-  supports `DATABASE_URL`, but it's only been exercised via code review, not a live Postgres
-  instance.
-- **No PR/branch review workflow.** All work has been committed directly to `main`. `main` is
-  branch-protected against force-push, but nothing currently requires review before a merge.
+- **Postgres is verified locally, not in production.** The checkpointer passed its live tests
+  against a local Postgres on 2026-10-05 (see Results). It hasn't run against a managed
+  Postgres or with several app instances sharing one database; see
+  [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md) Part 2 before doing that.
+- **Merge requests aren't gated.** Work goes through feature branches and GitLab merge requests,
+  and `main` is protected against force-push, but nothing requires an approval or a passing
+  pipeline before a merge.
 - **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
   programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
   been clicked through interactively.

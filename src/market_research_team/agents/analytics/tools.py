@@ -72,6 +72,8 @@ def value_range(values: list[float], entity: str | None = None) -> float:
 def percent_change(old_value: float, new_value: float, entity: str | None = None) -> float:
     """Compute the percentage change from old_value to new_value.
 
+    Raises an error when old_value is 0, since the change is undefined.
+
     `entity` optionally names which compared subject this calculation is
     about; it does not affect the computed value.
     """
@@ -85,6 +87,8 @@ def compound_growth_rate(
     start_value: float, end_value: float, periods: float, entity: str | None = None
 ) -> float:
     """Compute the compound growth rate, as a percentage, over a number of periods.
+
+    Raises an error unless start_value and periods are both positive.
 
     `entity` optionally names which compared subject this calculation is
     about; it does not affect the computed value.

@@ -9,40 +9,58 @@ SINCE = datetime(2026, 9, 1, tzinfo=UTC)
 
 
 class _FakeApi:
-    def __init__(self, scores=(), observations=(), traces=None, fail=False):
+    """Shaped like the current SDK: `scores_v3.get_many_v3` (cursor pages) and
+    `observations.get_many`, which serves the ERROR scan and, when filtered by
+    `trace_id`/`session_id`, the lookups that replaced the legacy traces API."""
+
+    def __init__(self, scores=(), observations=(), traces=None, sessions=None, fail=False):
         self._scores = list(scores)
         self._obs = list(observations)
-        self._traces = traces or {}
+        self._traces = traces or {}  # trace_id -> (session_id, metadata)
+        self._sessions = sessions or {}  # session_id -> [metadata, ...]
         self._fail = fail
-        self.scores = NS(get_many=self._get_scores)
+        self.scores_v3 = NS(get_many_v3=self._get_scores)
         self.observations = NS(get_many=self._get_obs)
-        self.trace = NS(get=self._get_trace)
         self.score_calls: list[dict] = []
+        self.lookup_calls: list[dict] = []
 
     def _get_scores(self, **kw):
         if self._fail:
             raise RuntimeError("401 Unauthorized")
         self.score_calls.append(kw)
-        page, limit = kw["page"], kw["limit"]
-        chunk = self._scores[(page - 1) * limit : page * limit]
-        pages = max(1, -(-len(self._scores) // limit))
-        return NS(data=chunk, meta=NS(total_pages=pages))
+        start, limit = int(kw["cursor"] or 0), kw["limit"]
+        end = start + limit
+        return NS(
+            data=self._scores[start:end],
+            meta=NS(cursor=str(end) if end < len(self._scores) else None),
+        )
 
     def _get_obs(self, **kw):
+        if "trace_id" in kw or "session_id" in kw:
+            self.lookup_calls.append(kw)
+        if "trace_id" in kw:
+            session, metadata = self._traces[kw["trace_id"]]
+            return NS(data=[NS(session_id=session, metadata=metadata)], meta=NS(cursor=None))
+        if "session_id" in kw:
+            rows = [
+                NS(session_id=kw["session_id"], metadata=m)
+                for m in self._sessions.get(kw["session_id"], [])
+            ]
+            return NS(data=rows, meta=NS(cursor=None))
         return NS(data=self._obs, meta=NS(cursor=None))
-
-    def _get_trace(self, trace_id):
-        return self._traces[trace_id]
 
 
 def _score(session, trace="tr1", ts="2026-09-20T10:00:00+00:00"):
-    return NS(session_id=session, trace_id=trace, timestamp=datetime.fromisoformat(ts))
+    """A v3 score: session-level when `session` is set, else attached to `trace`."""
+
+    subject = NS(kind="session", id=session) if session else NS(kind="trace", id=trace)
+    return NS(subject=subject, timestamp=datetime.fromisoformat(ts))
 
 
 def test_thumbs_down_scores_become_evidence_with_objective_from_the_trace():
     api = _FakeApi(
-        scores=[_score("t1")],
-        traces={"tr1": NS(session_id="t1", metadata={"objective": "Compare Acme"})},
+        scores=[_score(None, trace="tr1")],
+        traces={"tr1": ("t1", {"objective": "Compare Acme"})},
     )
 
     evidence, warnings = langfuse_source.collect_from_langfuse(SINCE, api=api)
@@ -51,14 +69,19 @@ def test_thumbs_down_scores_become_evidence_with_objective_from_the_trace():
     ev = evidence["t1"]
     assert ev.ratings == ["down"] and ev.objective == "Compare Acme"
     assert ev.langfuse_trace_ids == ["tr1"] and ev.sources == ["langfuse"]
-    assert api.score_calls[0]["name"] == "user_feedback"
-    assert api.score_calls[0]["value"] == 0 and api.score_calls[0]["operator"] == "="
+    call = api.score_calls[0]
+    assert call["name"] == "user_feedback" and call["data_type"] == "NUMERIC"
+    assert call["value_max"] == 0.0 and "subject" in call["fields"]
+    # Trace lookups go through v2 observations, asking for session + metadata.
+    assert api.lookup_calls[0]["trace_id"] == "tr1"
+    assert "basic" in api.lookup_calls[0]["fields"] and "metadata" in api.lookup_calls[0]["fields"]
 
 
-def test_score_without_session_uses_trace_lookup():
+def test_observation_scored_run_uses_the_observations_trace():
+    observation = NS(kind="observation", id="obs1", trace_id="tr7")
     api = _FakeApi(
-        scores=[_score(None, trace="tr7")],
-        traces={"tr7": NS(session_id="t7", metadata={"objective": "o"})},
+        scores=[NS(subject=observation, timestamp=None)],
+        traces={"tr7": ("t7", {"objective": "o"})},
     )
 
     evidence, _ = langfuse_source.collect_from_langfuse(SINCE, api=api)
@@ -83,9 +106,7 @@ def test_error_observations_become_langfuse_errors_and_eval_threads_are_skipped(
             start_time=datetime(2026, 9, 21, tzinfo=UTC),
         ),
     ]
-    api = _FakeApi(
-        observations=obs, traces={"tr2": NS(session_id="t2", metadata={"objective": "p"})}
-    )
+    api = _FakeApi(observations=obs, traces={"tr2": ("t2", {"objective": "p"})})
 
     evidence, _ = langfuse_source.collect_from_langfuse(SINCE, api=api)
 
@@ -97,8 +118,8 @@ def test_pagination_stops_at_the_cap_with_a_warning(monkeypatch):
     monkeypatch.setattr(langfuse_source, "MAX_ITEMS", 3)
     monkeypatch.setattr(langfuse_source, "_PAGE_SIZE", 2)
     api = _FakeApi(
-        scores=[_score(f"t{i}", trace=f"tr{i}") for i in range(5)],
-        traces={f"tr{i}": NS(session_id=f"t{i}", metadata={}) for i in range(5)},
+        scores=[_score(None, trace=f"tr{i}") for i in range(5)],
+        traces={f"tr{i}": (f"t{i}", {}) for i in range(5)},
     )
 
     evidence, warnings = langfuse_source.collect_from_langfuse(SINCE, api=api)
@@ -116,14 +137,14 @@ def test_langfuse_error_falls_back_to_audit_only():
 
 def test_one_failing_trace_lookup_does_not_discard_other_evidence():
     class _Api(_FakeApi):
-        def _get_trace(self, trace_id):
-            if trace_id == "gone":
+        def _get_obs(self, **kw):
+            if kw.get("trace_id") == "gone":
                 raise RuntimeError("404 Not Found")
-            return super()._get_trace(trace_id)
+            return super()._get_obs(**kw)
 
     api = _Api(
-        scores=[_score("t1", trace="tr1"), _score(None, trace="gone")],
-        traces={"tr1": NS(session_id="t1", metadata={"objective": "o"})},
+        scores=[_score(None, trace="tr1"), _score(None, trace="gone")],
+        traces={"tr1": ("t1", {"objective": "o"})},
     )
 
     evidence, warnings = langfuse_source.collect_from_langfuse(SINCE, api=api)
@@ -133,17 +154,17 @@ def test_one_failing_trace_lookup_does_not_discard_other_evidence():
 
 
 def test_session_score_without_a_trace_gets_its_objective_from_the_session():
-    class _Api(_FakeApi):
-        def __init__(self, **kw):
-            super().__init__(**kw)
-            self.trace = NS(get=self._get_trace, list=self._list)
-
-        def _list(self, **kw):
-            assert kw["session_id"] == "t1"
-            return NS(data=[NS(metadata={}), NS(metadata={"objective": "Compare Acme"})])
-
-    api = _Api(scores=[NS(session_id="t1", trace_id=None, timestamp=None)])
+    api = _FakeApi(scores=[_score("t1")], sessions={"t1": [{}, {"objective": "Compare Acme"}]})
 
     evidence, _ = langfuse_source.collect_from_langfuse(SINCE, api=api)
 
     assert evidence["t1"].objective == "Compare Acme"
+    assert api.lookup_calls[0]["session_id"] == "t1"
+
+
+def test_experiment_scores_are_not_production_runs():
+    api = _FakeApi(scores=[NS(subject=NS(kind="experiment", id="exp1"), timestamp=None)])
+
+    evidence, warnings = langfuse_source.collect_from_langfuse(SINCE, api=api)
+
+    assert evidence == {} and warnings == []

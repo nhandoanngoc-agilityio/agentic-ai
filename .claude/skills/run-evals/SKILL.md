@@ -28,7 +28,8 @@ Interpreting a failure: the `detail` string names the failed check. A grounded-n
 ## Release gate
 
 Every run ends with a gate verdict per provider covering task success, quality
-(LLM judge, `claude-opus-5` by default; LangSmith scores with `--langsmith`),
+(LLM judge pinned in `[judge]` of `gate.toml`, currently `openai/gpt-5.4-mini`, so an OpenAI key
+is needed even for Anthropic runs; LangSmith scores with `--langsmith`),
 tool accuracy, safety (must be 100%), p95 latency and cost per graph run.
 Thresholds, tolerances and prices are in `evals/gate.toml`.
 
