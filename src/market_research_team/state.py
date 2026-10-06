@@ -50,12 +50,28 @@ class AgentState(TypedDict):
     analytics_results: list[AnalyticsResult]
     report_path: str | None
     error: NotRequired[str | None]
-    # Set by `reporting_node` when a human explicitly discards a draft rather
+    # Set by `report_review_node` when a human explicitly discards a draft rather
     # than approving or rejecting it (the comparison UI's "losing" candidate).
     # A discard writes no report and records no error, so without this flag the
     # supervisor would see an unfinished run and route back to reporting
     # forever -- `decide_next_step` checks it to end the run instead.
     report_discarded: NotRequired[bool]
+    # Targeted re-research. When the supervisor hands work back to Research it
+    # names the gap (`research_focus`); Research rewrites queries for that gap
+    # and merges new findings into the existing ones. A pass that adds nothing
+    # new sets `research_exhausted`, after which Research is no longer offered.
+    research_focus: NotRequired[str | None]
+    research_exhausted: NotRequired[bool]
+    # Hand-off between `reporting_node` (drafts) and `report_review_node`
+    # (interrupt + write). The draft lives in checkpointed state so resuming
+    # the review never re-drafts: the file written is byte-for-byte the draft
+    # the human approved. `report_review_round` is 1-based once drafting starts
+    # and reset to 0 when the review concludes; `report_feedback` is the last
+    # rejection reason, folded into the next draft.
+    report_draft: NotRequired[str | None]
+    report_draft_warnings: NotRequired[list[str]]
+    report_review_round: NotRequired[int]
+    report_feedback: NotRequired[str | None]
     # Append-only: every node that blocks, drops, redacts or flags something
     # adds an event here. Read by the audit record at FINISH and by the CLI.
     guardrail_events: NotRequired[Annotated[list[GuardrailEvent], operator.add]]

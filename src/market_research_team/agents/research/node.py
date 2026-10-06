@@ -17,6 +17,10 @@ from market_research_team.state import AgentState, GuardrailEvent, ResearchFindi
 
 _RETRIEVAL_K_PER_QUERY = 4
 _RERANK_TOP_N = 5
+# Cap on findings kept across research passes (each pass adds up to
+# `_RERANK_TOP_N`), so repeated hand-backs can't grow the analytics and
+# report prompts without bound. Lowest-scoring findings are dropped first.
+_MAX_FINDINGS = 10
 
 
 def filter_injected_chunks(
@@ -50,16 +54,20 @@ def filter_injected_chunks(
 
 def run_research_pipeline(
     objective: str,
+    focus: str | None = None,
 ) -> tuple[list[ResearchFinding], int, int, list[GuardrailEvent]]:
     """Rewrite the objective into search queries, retrieve, then rerank.
 
-    Returns the reranked findings plus the query and candidate counts and
-    any retrieval guardrail events, so the node can report them without
-    recomputing anything.
+    `focus` is the gap the supervisor named on a hand-back: queries target it
+    and reranking scores chunks against objective plus gap, so gap-filling
+    chunks aren't ranked out by the broad objective. Returns the reranked
+    findings plus the query and candidate counts and any retrieval guardrail
+    events, so the node can report them without recomputing anything.
     """
 
     llm = get_chat_model()
-    queries = rewrite_and_expand(objective, llm)
+    queries = rewrite_and_expand(objective, llm, focus=focus)
+    rerank_query = f"{objective}\n{focus}" if focus else objective
 
     vectorstore = load_vectorstore(
         persist_dir=settings.vectorstore_dir,
@@ -75,7 +83,7 @@ def run_research_pipeline(
 
     cross_encoder = cached_cross_encoder(settings.reranker_model_name)
     reranked = rerank_cached(
-        objective,
+        rerank_query,
         candidates,
         cross_encoder,
         top_n=_RERANK_TOP_N,
@@ -96,20 +104,64 @@ def run_research_pipeline(
     return findings, len(queries), len(candidates), events
 
 
-def research_node(state: AgentState) -> dict[str, Any]:
-    findings, query_count, candidate_count, events = run_research_pipeline(state["objective"])
+def _finding_key(finding: ResearchFinding) -> tuple[str, str]:
+    return finding["source"], finding["content"]
 
-    return {
-        "research_findings": findings,
+
+def merge_findings(
+    existing: list[ResearchFinding], new: list[ResearchFinding]
+) -> tuple[list[ResearchFinding], int]:
+    """Union of two research passes, deduplicated by (source, content), best
+    score first, capped at `_MAX_FINDINGS`. Returns the merged list and how
+    many of its entries the new pass contributed."""
+
+    by_key = {_finding_key(finding): finding for finding in existing}
+    seen = set(by_key)
+    for finding in new:
+        key = _finding_key(finding)
+        if key not in by_key or finding["relevance_score"] > by_key[key]["relevance_score"]:
+            by_key[key] = finding
+    merged = sorted(by_key.values(), key=lambda f: f["relevance_score"], reverse=True)
+    merged = merged[:_MAX_FINDINGS]
+    added = sum(1 for finding in merged if _finding_key(finding) not in seen)
+    return merged, added
+
+
+def research_node(state: AgentState) -> dict[str, Any]:
+    existing = state.get("research_findings", [])
+    # Only a hand-back (findings already exist) is targeted; a first pass
+    # always searches the objective broadly.
+    focus = state.get("research_focus") if existing else None
+    findings, query_count, candidate_count, events = run_research_pipeline(
+        state["objective"], focus=focus
+    )
+    merged, added = merge_findings(existing, findings)
+    if not merged:
+        # Nothing in the index cleared the rerank floor: re-running Research
+        # would retrieve the same nothing until the recursion limit, so end
+        # the run with a clear reason instead.
+        message = "Research found no relevant material for this objective in the knowledge base."
+        return {
+            "error": message,
+            "research_exhausted": True,
+            "guardrail_events": events,
+            "messages": [AIMessage(content=message, name="research_agent")],
+        }
+
+    update: dict[str, Any] = {
+        "research_findings": merged,
+        "research_focus": None,
         "guardrail_events": events,
-        "messages": [
-            AIMessage(
-                content=(
-                    f"Research complete: {query_count} queries, "
-                    f"{candidate_count} candidates retrieved, "
-                    f"{len(findings)} kept after reranking."
-                ),
-                name="research_agent",
-            )
-        ],
     }
+    summary = (
+        f"Research complete: {query_count} queries, {candidate_count} candidates retrieved, "
+        f"{len(findings)} kept after reranking"
+    )
+    if existing:
+        summary += f", {added} new (gap: {focus or 'none given'})"
+        if added == 0:
+            # Another pass would search the same index for the same thing:
+            # tell the supervisor to stop offering Research.
+            update["research_exhausted"] = True
+    update["messages"] = [AIMessage(content=f"{summary}.", name="research_agent")]
+    return update

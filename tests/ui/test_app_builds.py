@@ -14,3 +14,11 @@ class _FakeCompiledGraph:
 def test_build_returns_blocks_without_raising() -> None:
     demo = build(_FakeCompiledGraph())
     assert isinstance(demo, gr.Blocks)
+
+
+def test_approval_row_has_a_discard_button() -> None:
+    demo = build(_FakeCompiledGraph())
+
+    labels = {block.value for block in demo.blocks.values() if isinstance(block, gr.Button)}
+
+    assert {"Approve", "Reject", "Discard"} <= labels

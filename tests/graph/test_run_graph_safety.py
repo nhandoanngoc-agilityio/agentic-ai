@@ -11,12 +11,14 @@ from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.agents.supervisor import router as supervisor_router_module
+from market_research_team.agents.supervisor.router import SupervisorRoute
 from market_research_team.graph import build_production_graph, run_graph
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding, RouteDecision
 
 
 def _fake_research_pipeline(
     objective: str,
+    focus: str | None = None,
 ) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     return (
         [{"source": "mock", "content": f"finding for {objective}", "relevance_score": 0.9}],
@@ -64,7 +66,9 @@ def _stub_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reporting_node_module, "draft_report", _fake_draft_report)
     monkeypatch.setattr(reporting_node_module, "write_report_via_mcp", _fake_write_report_via_mcp)
     monkeypatch.setattr(
-        supervisor_router_module, "run_supervisor_decision", _fake_supervisor_decision
+        supervisor_router_module,
+        "run_supervisor_decision",
+        lambda state: SupervisorRoute(_fake_supervisor_decision(state)),
     )
 
 

@@ -8,12 +8,14 @@ from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.reporting import node as reporting_node_module
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.agents.supervisor import router as supervisor_router_module
+from market_research_team.agents.supervisor.router import SupervisorRoute
 from market_research_team.graph import build_production_graph
 from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding, RouteDecision
 
 
 def _fake_research_pipeline(
     objective: str,
+    focus: str | None = None,
 ) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     findings: list[ResearchFinding] = [
         {
@@ -48,7 +50,7 @@ def _fake_draft_report(
 
 
 async def _fake_write_report_via_mcp(filename: str, content: str) -> str:
-    """Async on purpose: `reporting_node` wraps this in `asyncio.run(...)`,
+    """Async on purpose: `report_review_node` wraps this in `asyncio.run(...)`,
     so the stub must also be awaitable."""
 
     return "reports/mock-report.md"
@@ -79,7 +81,9 @@ def _stub_agent_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reporting_node_module, "draft_report", _fake_draft_report)
     monkeypatch.setattr(reporting_node_module, "write_report_via_mcp", _fake_write_report_via_mcp)
     monkeypatch.setattr(
-        supervisor_router_module, "run_supervisor_decision", _fake_supervisor_decision
+        supervisor_router_module,
+        "run_supervisor_decision",
+        lambda state: SupervisorRoute(_fake_supervisor_decision(state)),
     )
 
 
@@ -145,7 +149,11 @@ def test_supervisor_can_hand_off_back_to_research_before_finishing(
     def _bouncing_decision(_state: AgentState) -> RouteDecision:
         return next(decisions)
 
-    monkeypatch.setattr(supervisor_router_module, "run_supervisor_decision", _bouncing_decision)
+    monkeypatch.setattr(
+        supervisor_router_module,
+        "run_supervisor_decision",
+        lambda state: SupervisorRoute(_bouncing_decision(state)),
+    )
 
     result = _run_to_finish(_initial_state(), thread_id="hands-off-back-to-research")
 

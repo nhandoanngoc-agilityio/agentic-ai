@@ -86,3 +86,31 @@ def test_rewrite_and_expand_wraps_objective_in_delimiter_tags() -> None:
     assert human_message.content == (
         "<research_objective>\nAssess Acme pricing\n</research_objective>"
     )
+
+
+def test_rewrite_and_expand_adds_research_gap_when_focus_given() -> None:
+    captured: dict[str, list[object]] = {}
+
+    class _CapturingStructuredLLM:
+        def invoke(self, messages: list[object], config: object = None) -> _FakeQueryExpansion:
+            captured["messages"] = messages
+            return _FakeQueryExpansion(["globex churn"])
+
+    class _CapturingLLM:
+        def with_structured_output(self, _schema: object) -> _CapturingStructuredLLM:
+            return _CapturingStructuredLLM()
+
+    rewrite_and_expand("Assess Globex", _CapturingLLM(), focus="Globex churn")  # type: ignore[arg-type]
+
+    assert captured["messages"][1].content == (
+        "<research_objective>\nAssess Globex\n</research_objective>\n"
+        "<research_gap>\nGlobex churn\n</research_gap>"
+    )
+
+
+def test_rewrite_and_expand_fallback_keeps_the_focus(monkeypatch) -> None:
+    monkeypatch.setattr(query_rewriter_module.audit, "record", lambda *args, **kwargs: None)
+
+    queries = rewrite_and_expand("Assess Globex", _BrokenLLM(), focus="Globex churn")  # type: ignore[arg-type]
+
+    assert queries == ["Assess Globex Globex churn"]

@@ -9,7 +9,7 @@ You review changes in this LangGraph multi-agent repo. Read `CLAUDE.md` first, t
 
 Check, in order of severity:
 1. Correctness: wrong state updates, routes not in the conditional-edge map, nodes registered without `with_error_boundary`, swallowed `GraphBubbleUp`, un-bounded loops.
-2. Security: prompt-injection surfaces (see `docs/superpowers/specs/2026-09-16-security-hardening-design.md`), path traversal in MCP tools, secrets in code.
+2. Security: prompt-injection surfaces (see `docs/security.md`), path traversal in MCP tools, secrets in code.
 3. Tests: are new behaviours covered by hermetic tests? Does any test call a real LLM?
 4. Conventions from `CLAUDE.md`.
 

@@ -1,6 +1,8 @@
 """Top-level graph assembly."""
 
+import logging
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -10,7 +12,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from market_research_team.agents.analytics.node import analytics_node
-from market_research_team.agents.reporting.node import reporting_node
+from market_research_team.agents.reporting.node import (
+    report_review_node,
+    reporting_node,
+    route_after_draft,
+    route_after_review,
+)
 from market_research_team.agents.research.node import research_node
 from market_research_team.agents.supervisor.router import route_from_supervisor, supervisor_node
 from market_research_team.caching.response_cache import get_cached_response
@@ -24,6 +31,11 @@ from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import AgentState
 from market_research_team.versioning import trace_metadata
 
+logger = logging.getLogger(__name__)
+
+# Called after each node finishes: (node name, the partial state update it returned).
+StepCallback = Callable[[str, dict[str, Any]], None]
+
 
 def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
     builder = StateGraph(AgentState)
@@ -33,7 +45,11 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
     )
     builder.add_node("research", with_error_boundary("research", research_node))
     builder.add_node("analytics", with_error_boundary("analytics", analytics_node))
+    # Reporting is two nodes: `reporting` drafts, `report_review` holds the
+    # human-approval interrupt and the write. Splitting them means resuming the
+    # interrupt never re-drafts -- see `agents/reporting/node.py`.
     builder.add_node("reporting", with_error_boundary("reporting", reporting_node))
+    builder.add_node("report_review", with_error_boundary("report_review", report_review_node))
     # Input guardrail runs first so CLI, `langgraph dev` and the frontend all
     # get the same validation; a rejection sets `error`, which the supervisor
     # turns into FINISH without calling the LLM.
@@ -56,7 +72,16 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
     )
     builder.add_edge("research", "supervisor")
     builder.add_edge("analytics", "supervisor")
-    builder.add_edge("reporting", "supervisor")
+    builder.add_conditional_edges(
+        "reporting",
+        route_after_draft,
+        {"report_review": "report_review", "supervisor": "supervisor"},
+    )
+    builder.add_conditional_edges(
+        "report_review",
+        route_after_review,
+        {"reporting": "reporting", "supervisor": "supervisor"},
+    )
 
     return builder.compile(checkpointer=checkpointer)
 
@@ -117,6 +142,7 @@ def run_graph(
     compiled_graph: Any = None,
     thread_id: str | None = None,
     recursion_limit: int | None = None,
+    on_step: StepCallback | None = None,
 ) -> AgentState:
     """Safe entrypoint: invoke with a bounded recursion limit, and turn a
     `GraphRecursionError` into the same `error`-populated state shape the
@@ -129,6 +155,10 @@ def run_graph(
     real checkpointer and the same `thread_id` the paused run used. The
     returned state includes an `__interrupt__` key when the run pauses
     again rather than reaching `FINISH`.
+
+    `on_step`, when given, is called after each node with its name and update
+    (the Gradio UI uses it to show progress). The graph is then streamed rather
+    than invoked; the returned state is the same either way.
     """
 
     initial_state = _apply_response_cache(initial_state)
@@ -155,12 +185,9 @@ def run_graph(
                 tags=["market-research-team"],
                 metadata=version_metadata,
             ):
-                # `compiled_graph: Any` (deliberate — see above) makes `target_graph`'s
-                # type partially unknown to the checker; the real object is always a
-                # CompiledStateGraph with a normal `.invoke`.
-                result = target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
+                result = _execute(target_graph, initial_state, config, on_step)
         else:
-            result = target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
+            result = _execute(target_graph, initial_state, config, on_step)
     except GraphRecursionError as exc:
         _record_run_latency(thread_id, objective, start, "recursion_limit")
         return {**initial_state, "error": f"Recursion limit reached: {exc}"}
@@ -173,6 +200,42 @@ def run_graph(
     outcome = "interrupted" if result.get("__interrupt__") else "finished"
     _record_run_latency(thread_id, objective, start, outcome)
     return cast(AgentState, result)
+
+
+def _execute(
+    target_graph: Any,
+    initial_state: AgentState | Command[Any],
+    config: RunnableConfig,
+    on_step: StepCallback | None,
+) -> dict[str, Any]:
+    """`invoke`, or -- with `on_step` -- a stream that reports each node and
+    rebuilds what `invoke` returns: the final state, plus `__interrupt__` when
+    the run paused for approval."""
+
+    if on_step is None:
+        # `compiled_graph: Any` (deliberate, see `run_graph`) leaves the type partly unknown.
+        return target_graph.invoke(initial_state, config=config)  # type: ignore[reportUnknownMemberType]
+
+    final: dict[str, Any] = {}
+    interrupts: list[Any] = []
+    for mode, chunk in target_graph.stream(  # type: ignore[reportUnknownMemberType]
+        initial_state, config=config, stream_mode=["updates", "values"]
+    ):
+        if mode == "values":
+            final = chunk
+            continue
+        for node, update in chunk.items():
+            if node == "__interrupt__":
+                interrupts.extend(update)
+                continue
+            try:
+                on_step(node, update or {})
+            except Exception:
+                # Progress display must never break a run.
+                logger.exception("on_step callback failed for node %r", node)
+    if interrupts:
+        final = {**final, "__interrupt__": interrupts}
+    return final
 
 
 def _record_run_latency(

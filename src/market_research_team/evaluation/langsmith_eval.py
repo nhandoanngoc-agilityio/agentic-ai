@@ -368,13 +368,17 @@ def run_langsmith_eval(
     provider: Literal["anthropic", "openai"] | None = None,
     *,
     judge_llm: BaseChatModel | None = None,
+    repeats: int = 1,
 ) -> list[LangSmithEvalSummary]:
     """Sync each category's dataset and run a LangSmith experiment against it, layering the
     existing deterministic checks with a category-tailored LLM-judge. Mirrors
     offline_eval.run_all()'s provider-override-then-restore pattern. Requires
     LANGSMITH_API_KEY to be set (validated by the caller -- see scripts/run_evals.py).
     `judge_llm` grades the outputs (the release gate pins it so the candidate never grades
-    itself); without it the candidate model judges, as before."""
+    itself); without it the candidate model judges, as before. `repeats` runs every example
+    that many times (LangSmith `num_repetitions`), so `run_evals.py --repeats 3` averages
+    the judged quality over three samples instead of one -- with one judged row for some
+    categories, a single judge call otherwise swings the gate."""
 
     original_provider = settings.llm_provider
     if provider is not None:
@@ -400,6 +404,7 @@ def run_langsmith_eval(
                 experiment_prefix=f"market-research-team-{category}",
                 metadata=trace_metadata(),
                 client=client,
+                num_repetitions=repeats,
             )
             rows = list(results)
             total = len(rows)

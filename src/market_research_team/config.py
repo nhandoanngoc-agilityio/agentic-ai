@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # nothing exports `.env` into os.environ. repr=False keeps them out of output.
     anthropic_api_key: str | None = Field(default=None, repr=False)
     openai_api_key: str | None = Field(default=None, repr=False)
-    anthropic_model: str = "claude-sonnet-5"
+    anthropic_model: str = "claude-sonnet-5-5"
     openai_model: str = "gpt-4o-mini"  # broadly available; model access varies by account/tier
     # Pinned sampling parameters. None leaves the provider default in place;
     # either way the value is recorded in the agent manifest (versioning.py).

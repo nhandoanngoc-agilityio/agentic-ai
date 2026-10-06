@@ -52,10 +52,22 @@ def _stub_llm_and_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _compiled_graph():
+    """Draft + review wired as in `graph.py`, with the supervisor replaced by END."""
+
     builder = StateGraph(AgentState)
     builder.add_node("reporting", reporting_node_module.reporting_node)
+    builder.add_node("report_review", reporting_node_module.report_review_node)
     builder.add_edge(START, "reporting")
-    builder.add_edge("reporting", END)
+    builder.add_conditional_edges(
+        "reporting",
+        reporting_node_module.route_after_draft,
+        {"report_review": "report_review", "supervisor": END},
+    )
+    builder.add_conditional_edges(
+        "report_review",
+        reporting_node_module.route_after_review,
+        {"reporting": "reporting", "supervisor": END},
+    )
     return builder.compile(checkpointer=InMemorySaver())
 
 
@@ -128,12 +140,9 @@ def test_reporting_node_redrafts_with_feedback_after_rejection(
     result = graph.invoke(Command(resume={"approved": True}), config=config)
 
     assert result["report_path"] is not None
-    # LangGraph replays the node from the top on every resume, so
-    # `draft_report` re-runs for every already-resolved earlier round too --
-    # `feedback_log` accumulates several calls, not exactly one per round.
-    # What matters is every call after the rejection carries its feedback.
-    assert None in feedback_log
-    assert "Add a pricing table." in feedback_log
+    # Drafting is its own node, so resuming the review never re-drafts:
+    # exactly one draft per round, the second carrying the feedback.
+    assert feedback_log == [None, "Add a pricing table."]
 
 
 def test_reporting_node_ends_run_after_max_review_rounds(
@@ -184,8 +193,57 @@ def test_reporting_node_discards_immediately_without_further_redraft(
     # `decide_next_step` has to end the run instead of routing back to reporting.
     # (tests/test_graph_discard_terminates.py proves that end-to-end on the real graph.)
     assert result.get("report_discarded") is True
-    # LangGraph replays the node from the top on every resume (see the analogous comment in
-    # test_reporting_node_redrafts_with_feedback_after_rejection above), so draft_report may be
-    # called more than once here -- what matters is none of those calls ever carried feedback,
-    # i.e. no redraft-with-feedback round was ever triggered by the discard.
-    assert draft_calls and all(feedback is None for feedback in draft_calls)
+    # One draft only: the discard never triggers a redraft round.
+    assert draft_calls == [None]
+
+
+def test_approved_draft_is_exactly_what_gets_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: drafting used to live in the interrupting node, so resuming
+    after approval re-ran the LLM and wrote a different, unreviewed draft. A
+    non-deterministic fake LLM makes that visible."""
+
+    calls = iter(range(100))
+    monkeypatch.setattr(
+        reporting_node_module,
+        "draft_report",
+        lambda objective, findings, results, llm, feedback=None: f"# Draft #{next(calls)}",
+    )
+    written: list[str] = []
+
+    async def _recording_write(filename: str, content: str) -> str:
+        written.append(content)
+        return f"reports/{filename}"
+
+    monkeypatch.setattr(reporting_node_module, "write_report_via_mcp", _recording_write)
+
+    graph = _compiled_graph()
+    config: dict[str, Any] = {"configurable": {"thread_id": "t-exact"}}
+
+    paused = graph.invoke(_initial_state(), config=config)
+    paused = graph.invoke(Command(resume={"approved": False, "feedback": "shorter"}), config=config)
+    shown = paused["__interrupt__"][0].value["content"]
+    result = graph.invoke(Command(resume={"approved": True}), config=config)
+
+    assert written == [shown]
+    assert shown == "# Draft #1"
+    assert result["report_review_round"] == 0
+    assert result.get("report_feedback") is None
+
+
+async def test_approval_writes_even_when_an_event_loop_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the review node wrote via `asyncio.run`, which raises when
+    the graph is driven from code that already has a running loop (an async
+    handler, a notebook). A sync `graph.invoke` inside this async test runs the
+    node on the loop's thread, reproducing that."""
+
+    monkeypatch.setattr(reporting_node_module, "draft_report", _fake_draft_report_recording([]))
+    graph = _compiled_graph()
+    config: dict[str, Any] = {"configurable": {"thread_id": "t-loop"}}
+
+    graph.invoke(_initial_state(), config=config)
+    result = graph.invoke(Command(resume={"approved": True}), config=config)
+
+    assert result["report_path"] == "reports/assess-competitor-pricing-strategy.md"
+    assert result.get("error") is None

@@ -418,7 +418,9 @@ def test_run_langsmith_eval_computes_pass_rate_and_restores_provider(monkeypatch
         def __iter__(self):
             return iter(self._rows)
 
-    def _fake_evaluate(_target, *, data, evaluators, experiment_prefix, client, metadata):
+    def _fake_evaluate(
+        _target, *, data, evaluators, experiment_prefix, client, metadata, num_repetitions
+    ):
         # data/evaluators/client are unused here but must keep these exact names --
         # run_langsmith_eval calls evaluate(..., data=..., evaluators=..., client=...) by keyword.
         assert metadata["agent_version"]  # experiments are tagged with the agent version
@@ -469,7 +471,9 @@ def test_run_langsmith_eval_computes_partial_pass_rate(monkeypatch) -> None:
         def __iter__(self):
             return iter(self._rows)
 
-    def _fake_evaluate(_target, *, data, evaluators, experiment_prefix, client, metadata):
+    def _fake_evaluate(
+        _target, *, data, evaluators, experiment_prefix, client, metadata, num_repetitions
+    ):
         # 3 rows: 2 fully passing (both evaluators score 1.0), 1 failing (one evaluator
         # scores 0.0) -- pass_rate should be 2/3, not 1.0 and not 0.0.
         return _FakeExperimentResults(
@@ -551,8 +555,8 @@ def test_run_langsmith_eval_reports_mean_judge_score(monkeypatch) -> None:
     monkeypatch.setattr(
         langsmith_eval,
         "evaluate",
-        lambda _t, *, data, evaluators, experiment_prefix, client, metadata: _Experiment(
-            experiment_prefix
+        lambda _t, *, data, evaluators, experiment_prefix, client, metadata, num_repetitions: (
+            _Experiment(experiment_prefix)
         ),
     )
 
@@ -578,7 +582,9 @@ def test_run_langsmith_eval_uses_the_given_judge_model(monkeypatch) -> None:
         def __iter__(self):
             return iter([])
 
-    def fake_evaluate(target, *, data, evaluators, experiment_prefix, client, metadata):
+    def fake_evaluate(
+        target, *, data, evaluators, experiment_prefix, client, metadata, num_repetitions
+    ):
         judge_llms.append(evaluators[1].keywords["llm"])
         assert target.keywords["llm"] == "candidate"
         return _Experiment()
@@ -589,6 +595,36 @@ def test_run_langsmith_eval_uses_the_given_judge_model(monkeypatch) -> None:
 
     assert judge_llms and all(llm == "judge" for llm in judge_llms)
     assert all(summary.row_count == 0 for summary in summaries)
+
+
+def test_run_langsmith_eval_repeats_every_example(monkeypatch) -> None:
+    """`--repeats 3` must reach LangSmith: otherwise judged quality rests on one
+    sample per example while the deterministic metrics average three."""
+
+    monkeypatch.setattr(langsmith_eval, "get_chat_model", lambda: "candidate")
+    monkeypatch.setattr(langsmith_eval, "Client", lambda: _FakeLangSmithClient())
+    monkeypatch.setattr(
+        langsmith_eval, "sync_dataset", lambda client, category, examples: _FakeDataset(category)
+    )
+    repetitions: list[int] = []
+
+    class _Experiment:
+        experiment_name = "e"
+
+        def __iter__(self):
+            return iter([])
+
+    def fake_evaluate(
+        target, *, data, evaluators, experiment_prefix, client, metadata, num_repetitions
+    ):
+        repetitions.append(num_repetitions)
+        return _Experiment()
+
+    monkeypatch.setattr(langsmith_eval, "evaluate", fake_evaluate)
+
+    langsmith_eval.run_langsmith_eval("openai", judge_llm="judge", repeats=3)
+
+    assert repetitions and set(repetitions) == {3}
 
 
 def test_target_full_pipeline_answers_the_approval_interrupt(monkeypatch) -> None:

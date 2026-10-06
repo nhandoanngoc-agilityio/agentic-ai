@@ -51,6 +51,9 @@ def _resolve_report_path(filename: str) -> Path:
 def write_report(filename: str, content: str) -> str:
     """Write markdown content to a file in the reports directory.
 
+    `filename` must be a plain filename ending in `.md`, at most 128
+    characters, with no directory components; anything else raises an error
+    and nothing is written. `content` is limited to 256,000 bytes (UTF-8).
     Creates the file if it doesn't exist, or overwrites it if it does.
     Returns the absolute path that was written.
     """

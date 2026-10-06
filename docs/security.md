@@ -1,7 +1,7 @@
 # Security and guardrails
 
 How this project keeps the agents safe, useful and auditable, and what it deliberately does
-not do. Design rationale: `superpowers/specs/2026-09-18-layered-guardrails-design.md`.
+not do. Design decisions are logged in `architecture.md`.
 
 ## Principle
 
@@ -14,7 +14,7 @@ no external moderation service, no measurable latency.
 | Layer | Control | Code | Behaviour on trigger |
 |---|---|---|---|
 | Input | Length bounds, control-char stripping, prompt-injection and exfiltration denylist | `security/input_validation.py`, run as the first graph node by `security/input_guard.py` | Run ends with `error`, no LLM call, one `input` event |
-| Retrieval | Cross-encoder score floor (`RERANK_SCORE_FLOOR`, default -8.0) | `retrieval/reranker.py` | Low-scoring chunks dropped; off-topic objectives get empty context |
+| Retrieval | Cross-encoder score floor (`RERANK_SCORE_FLOOR`, default -8.0) | `retrieval/reranker.py` | Low-scoring chunks dropped; an off-topic objective (nothing above the floor) ends the run after one Research pass with a "no relevant material" error |
 | Retrieval | Injection-pattern scan on every kept chunk | `agents/research/node.py::filter_injected_chunks` | Chunk dropped, one `retrieval` event naming the source file |
 | Tool | Analytics tools are fixed math functions, no code execution | `agents/analytics/tools.py` | n/a |
 | Tool | MCP server writes `.md` only, inside `REPORTS_DIR`, filename <= 128 chars, content <= 256 KB | `mcp_server/fs_server.py` | Tool call errors; nothing written |

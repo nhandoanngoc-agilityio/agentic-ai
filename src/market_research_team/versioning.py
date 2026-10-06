@@ -131,6 +131,7 @@ def _knowledge_static() -> dict[str, Any]:
         "leaf_chunk_overlap": settings.leaf_chunk_overlap,
         "retrieval_k_per_query": research._RETRIEVAL_K_PER_QUERY,
         "rerank_top_n": research._RERANK_TOP_N,
+        "max_research_findings": research._MAX_FINDINGS,
     }
 
 
@@ -149,6 +150,7 @@ def _memory_safety() -> dict[str, Any]:
         "cache_policy_version": settings.cache_policy_version,
         "recursion_limit": settings.recursion_limit,
         "max_routing_visits": router._MAX_ROUTING_VISITS,
+        "supervisor_finding_snippet_chars": router._FINDING_SNIPPET_CHARS,
         "max_tool_iterations": analytics._MAX_TOOL_ITERATIONS,
         "max_review_rounds": reporting._MAX_REVIEW_ROUNDS,
         "max_objective_length": input_validation._MAX_OBJECTIVE_LENGTH,

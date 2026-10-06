@@ -1,7 +1,6 @@
 """Reporting Agent node: drafts a markdown report and writes it via the
 local MCP filesystem server."""
 
-import asyncio
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -9,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from market_research_team.agents.reporting.mcp_client import load_reporting_tools
+from market_research_team.async_utils import run_coroutine_sync
 from market_research_team.caching.response_cache import put_cached_response
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
@@ -17,7 +17,7 @@ from market_research_team.security.output_filters import (
     apply_output_guardrails,
     warnings_from_events,
 )
-from market_research_team.state import AgentState, AnalyticsResult, GuardrailEvent, ResearchFinding
+from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
 
 # Caps the human-review loop in `reporting_node` below, mirroring the
 # supervisor's `_MAX_ROUTING_VISITS` guard against an endless back-and-forth.
@@ -175,80 +175,113 @@ async def run_reporting_pipeline(
 
 
 def reporting_node(state: AgentState) -> dict[str, Any]:
-    """Draft a report and gate the (irreversible) disk write behind a human
-    approval interrupt.
+    """Draft one review round's report and hand it to `report_review_node`.
 
-    A rejection can carry feedback, which is folded into the next draft; a
-    reviewer who keeps rejecting for `_MAX_REVIEW_ROUNDS` rounds ends the
-    run without ever writing, the same way any other node failure does.
+    Drafting and the human-approval interrupt are separate nodes on purpose:
+    LangGraph replays an interrupted node from the top on resume, so drafting
+    inside the interrupting node would call the LLM again and write a fresh,
+    unreviewed draft instead of the one the human approved. Here the draft is
+    committed to checkpointed state before the review node pauses on it.
+
+    Emits no message: the route trace keeps one `reporting_agent` entry per
+    run, added by the review node when it concludes.
     """
 
     objective = state["objective"]
     findings = state.get("research_findings", [])
     results = state.get("analytics_results", [])
-    put_cached_response(
-        objective,
-        findings,
-        results,
-        settings.vectorstore_dir,
-        guardrail_events=state.get("guardrail_events", []),
-    )
-    llm = get_chat_model()
-    filename = f"{_slugify(objective)}.md"
-
-    feedback: str | None = None
-    events: list[GuardrailEvent] = []
-    for attempt in range(1, _MAX_REVIEW_ROUNDS + 1):
-        raw_draft = draft_report(objective, findings, results, llm, feedback=feedback)
-        # Output guardrails: redact PII, scrub secrets, mark ungrounded
-        # figures. Nothing blocks -- the warnings travel with the interrupt so
-        # the human approves with eyes open.
-        report_markdown, round_events = apply_output_guardrails(raw_draft, findings, results)
-        events.extend(round_events)
-        decision = interrupt(
-            {
-                "action": "write_report",
-                "filename": filename,
-                "content": report_markdown,
-                "attempt": attempt,
-                "max_attempts": _MAX_REVIEW_ROUNDS,
-                "warnings": warnings_from_events(round_events),
-            }
+    attempt = state.get("report_review_round", 0) + 1
+    if attempt == 1:
+        put_cached_response(
+            objective,
+            findings,
+            results,
+            settings.vectorstore_dir,
+            guardrail_events=state.get("guardrail_events", []),
         )
-        if decision.get("approved"):
-            report_path = asyncio.run(write_report_via_mcp(filename, report_markdown))
-            return {
-                "report_path": report_path,
-                "guardrail_events": events,
-                "messages": [
-                    AIMessage(content=f"Report written to {report_path}.", name="reporting_agent")
-                ],
-            }
-        if decision.get("discard"):
-            # `report_discarded` is what actually ends the run: a discard sets
-            # neither `report_path` nor `error`, so the supervisor's
-            # `decide_next_step` would otherwise route straight back here.
-            return {
-                "report_path": None,
-                "report_discarded": True,
-                "guardrail_events": events,
-                "messages": [
-                    AIMessage(
-                        content="Report discarded (comparison not selected).",
-                        name="reporting_agent",
-                    )
-                ],
-            }
-        feedback = decision.get("feedback")
+
+    feedback = state.get("report_feedback") if attempt > 1 else None
+    raw_draft = draft_report(objective, findings, results, get_chat_model(), feedback=feedback)
+    # Output guardrails: redact PII, scrub secrets, mark ungrounded figures.
+    # Nothing blocks -- the warnings travel with the interrupt so the human
+    # approves with eyes open.
+    report_markdown, events = apply_output_guardrails(raw_draft, findings, results)
+    return {
+        "report_draft": report_markdown,
+        "report_draft_warnings": warnings_from_events(events),
+        "report_review_round": attempt,
+        "guardrail_events": events,
+    }
+
+
+def _review_concluded(message: str, **updates: Any) -> dict[str, Any]:
+    """Final update from `report_review_node`: reset the round bookkeeping so a
+    later run on the same thread starts again at round 1."""
 
     return {
-        "report_path": None,
-        "error": f"Reporting write rejected after {_MAX_REVIEW_ROUNDS} review rounds.",
-        "guardrail_events": events,
-        "messages": [
-            AIMessage(
-                content=(f"Report rejected after {_MAX_REVIEW_ROUNDS} review rounds; ending run."),
-                name="reporting_agent",
-            )
-        ],
+        "report_review_round": 0,
+        "report_feedback": None,
+        "messages": [AIMessage(content=message, name="reporting_agent")],
+        **updates,
     }
+
+
+def report_review_node(state: AgentState) -> dict[str, Any]:
+    """Gate the (irreversible) disk write behind a human approval interrupt.
+
+    Holds only the interrupt and the write, so replaying it on resume is
+    cheap and deterministic. A rejection stores its feedback and routes back
+    to `reporting_node` for a redraft; a reviewer who keeps rejecting for
+    `_MAX_REVIEW_ROUNDS` rounds ends the run without ever writing, the same
+    way any other node failure does.
+    """
+
+    draft = state.get("report_draft")
+    if not draft:
+        raise ValueError("report_review reached without a draft to review.")
+    attempt = state.get("report_review_round", 1)
+    filename = f"{_slugify(state['objective'])}.md"
+
+    decision = interrupt(
+        {
+            "action": "write_report",
+            "filename": filename,
+            "content": draft,
+            "attempt": attempt,
+            "max_attempts": _MAX_REVIEW_ROUNDS,
+            "warnings": state.get("report_draft_warnings", []),
+        }
+    )
+    if decision.get("approved"):
+        report_path = run_coroutine_sync(write_report_via_mcp(filename, draft))
+        return _review_concluded(f"Report written to {report_path}.", report_path=report_path)
+    if decision.get("discard"):
+        # `report_discarded` is what actually ends the run: a discard sets
+        # neither `report_path` nor `error`, so the supervisor's
+        # `decide_next_step` would otherwise route straight back to reporting.
+        return _review_concluded(
+            "Report discarded (comparison not selected).",
+            report_path=None,
+            report_discarded=True,
+        )
+    if attempt >= _MAX_REVIEW_ROUNDS:
+        return _review_concluded(
+            f"Report rejected after {_MAX_REVIEW_ROUNDS} review rounds; ending run.",
+            report_path=None,
+            error=f"Reporting write rejected after {_MAX_REVIEW_ROUNDS} review rounds.",
+        )
+    return {"report_feedback": decision.get("feedback")}
+
+
+def route_after_draft(state: AgentState) -> str:
+    """Draft -> review, unless drafting failed (error boundary set `error`)."""
+
+    return "supervisor" if state.get("error") else "report_review"
+
+
+def route_after_review(state: AgentState) -> str:
+    """Back to drafting after a rejection; to the supervisor once the review
+    concluded (written, discarded, or out of rounds / failed)."""
+
+    concluded = state.get("report_path") or state.get("report_discarded") or state.get("error")
+    return "supervisor" if concluded else "reporting"

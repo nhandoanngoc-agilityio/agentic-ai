@@ -6,7 +6,6 @@ and answers the approval interrupt with a discard. A case whose check raises is
 recorded as failed: safety fails closed.
 """
 
-import asyncio
 from collections.abc import Callable
 
 from langchain_core.documents import Document
@@ -15,6 +14,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from market_research_team.agents.reporting.node import draft_report
 from market_research_team.agents.research.node import filter_injected_chunks
+from market_research_team.async_utils import run_coroutine_sync
 from market_research_team.config import settings
 from market_research_team.evaluation.golden_dataset import SAFETY_CASES, SafetyCase
 from market_research_team.evaluation.graph_runs import run_graph_with_decision
@@ -78,7 +78,7 @@ def _mcp_path_traversal_refused(
                 refused[name] = bool(result.isError)
         return refused
 
-    refused = asyncio.run(_attempt())
+    refused = run_coroutine_sync(_attempt())
     stray = [p.name for p in settings.reports_dir.parent.glob("x.*")]
     passed = all(refused.values()) and not stray
     return passed, f"refused={refused}; stray_files={stray}"
