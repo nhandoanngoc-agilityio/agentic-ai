@@ -7,7 +7,9 @@ a final report to disk via a custom local MCP server.
 ## Architecture
 
 ```
-                     ┌───────────────────┐
+               objective → input_guard → planner (2–4 sub-questions)
+                                │
+                     ┌──────────▼────────┐
           ┌─────────▶│  Supervisor Node  │◀─────────┐
           │          └─────────┬─────────┘          │
           │                    │ routes              │
@@ -27,28 +29,56 @@ a final report to disk via a custom local MCP server.
                                        reports/*.md
 ```
 
-- **Supervisor Router Node** — LLM-driven routing between sub-agents via
-  conditional edges; can hand work back to Research or Analytics, not just
-  march forward, bounded by a visit cap. A hand-back to Research names the
-  gap to fill; once a Research pass adds nothing new, Research is no longer
-  offered.
+- **Planner Node** — breaks the objective into 2–4 sub-questions (one company
+  per question, none comparing companies) before any research. If planning fails, the plan
+  is the objective itself, and the run proceeds as a single-question run.
+- **Supervisor Router Node** — routes between sub-agents via conditional edges.
+  On each LLM decision it first judges which plan items the findings answer
+  (an "answered" claim must cite a source that is really in the findings), then
+  hands back to Research for an open item, moves on to Analytics, or to
+  Reporting. Each sub-question gets one targeted Research pass, and Research is
+  offered only while an open item hasn't had it; Analytics is offered again only
+  when the findings changed since it ran. A visit cap is the last safety net. Every route carries a rationale and says who decided it.
 - **Research Agent Node** — advanced RAG: query rewriting/expansion, vector
   retrieval, cross-encoder reranking. On a hand-back it searches for the named
-  gap and merges new findings into the existing ones (deduplicated, capped at
-  10); if nothing clears the rerank floor on the first pass, the run ends with
-  an error instead of retrying.
+  plan item and merges new findings into the existing ones (deduplicated, capped
+  at 10). A targeted pass that adds nothing marks that item unanswerable; if
+  nothing clears the rerank floor on the first pass, the run ends with an error
+  instead of retrying.
 - **Analytics Agent Node** — tool-calling agent using native Python
   math/stat functions to evaluate metrics; every reported number is backed
-  by a real tool call.
+  by a real tool call, and each call's inputs are checked against the findings
+  (an input the findings don't contain is flagged and grounds nothing). Each
+  call carries a short label that names the metric in the report.
 - **Reporting Agent** — two nodes. `reporting` drafts a markdown report and
   runs the output guardrails; `report_review` pauses on a human-approval
   interrupt, then calls a custom local MCP server (spawned over stdio) to write
   that exact draft to disk. A rejection loops back to `reporting` for a redraft.
+  Plan items left unanswered are listed under "Open questions" in the draft.
 
 Every node is wrapped with an error boundary (`guardrails.py`): an
-unexpected failure is recorded into state and ends the run cleanly instead
-of crashing. The safe entrypoint (`run_graph` in `graph.py`) also bounds
-recursion and catches `GraphRecursionError`.
+unexpected failure is recorded into state, labelled with its exception type and
+whether it was transient (timeout, rate limit, connection), and ends the run
+cleanly instead of crashing. Model calls have a timeout and SDK-level retries;
+the MCP write has a timeout. The safe entrypoint (`run_graph` in `graph.py`)
+also bounds recursion and catches `GraphRecursionError`, including on a resume.
+
+### How the agent decides
+
+| Decision | Who makes it |
+|---|---|
+| The sub-questions to answer | The model (planner), with a one-item fallback |
+| Which sub-questions the findings answer | The model, checked by code against the findings' sources |
+| Research again, analyze, or report | The model, among the steps code allows |
+| Which sub-question to research next | The model (`focus_id`), defaulting to the first open item |
+| A sub-question is unanswerable | Code: a targeted pass added nothing |
+| End on error or discard, first research pass, visit cap, finish after the write | Code rules |
+| Which math tool, with which inputs | The model (Analytics), inputs checked against the findings |
+| Whether the report is written | A person (approval interrupt) |
+
+Each supervisor decision is logged as a `route_decision` audit event with
+`decided_by` (`rule`, `llm` or `fallback`) and a rationale, and shown in the run's
+progress messages.
 
 ## Stack
 
@@ -77,7 +107,8 @@ src/market_research_team/
 ├── security/                 # layered guardrails: input validation, output filters, audit log
 ├── caching/                  # retrieval / rerank / opt-in response caches (SQLite)
 ├── agents/
-│   ├── supervisor/           # LLM-driven routing + targeted hand-backs to Research
+│   ├── planner/              # objective -> 2-4 sub-questions (the plan)
+│   ├── supervisor/           # plan coverage + routing, targeted hand-backs, rationale
 │   ├── research/             # research node (uses retrieval/), merges passes
 │   ├── analytics/            # native Python math/stat tool-calling agent
 │   └── reporting/            # draft node + human-review node + MCP client wiring
@@ -144,9 +175,14 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 
 Verified against this repo's current state, not aspirational:
 
-- **Test suite (2026-10-05)**: 515 `pytest` tests: 512 pass, and the 3 live-Postgres tests skip
-  unless `DATABASE_URL` points at a running server. `ruff check` and `ruff format --check` are
-  clean over `src tests scripts gradio_app`. Hermetic: no API key or seeded vector store required.
+- **Test suite (2026-10-06)**: 606 `pytest` tests: 603 pass, and the 3 live-Postgres tests skip
+  unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
+  `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
+  Hermetic: no API key or seeded vector store required. GitLab CI runs all of these.
+- **Release gate after the planner change**: not yet re-run. The baseline below predates the
+  planner, the coverage-tracking supervisor, the grounding changes and the new eval cases, so
+  the next `run_evals.py --repeats 3` run reports every changed component and needs
+  `--update-baseline` once it passes.
 - **Postgres checkpointer (2026-10-05)**: with `DATABASE_URL` pointing at a local Postgres, all
   11 `tests/checkpointing` tests pass, including the 3 live ones: the real graph saves its
   checkpoints to Postgres, resumes through the approval interrupt, and keeps threads separate.
@@ -335,9 +371,11 @@ What happens during a run:
 4. On approval, the report is written through the local MCP filesystem server to `reports/`
    (or `REPORTS_DIR`).
 
-Re-running with the same `--thread-id` resumes from the checkpoint (SQLite by default,
-Postgres when `DATABASE_URL` is set; see [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md))
-instead of starting over. Every run spends real API money — the test suite does not.
+Each run is checkpointed under its thread id (SQLite by default, Postgres when
+`DATABASE_URL` is set; see [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md)), and
+the approval prompt resumes it within the same CLI session. `--thread-id` must be new: the CLI
+refuses an id that already has a run, since a fresh run on an old thread would inherit its
+state. Every run spends real API money — the test suite does not.
 
 **Option B — LangGraph Studio:**
 
@@ -490,6 +528,8 @@ and can be overridden via `.env` or real environment variables. From
 | `AUDIT_LOG_PATH` | `./data/audit.jsonl` | Append-only JSONL audit log of finished runs and human decisions |
 | `AUDIT_RETENTION_DAYS` / `AUTO_PRUNE_ENABLED` | `90` / `true` | Retention window for the audit log and checkpoints; daily auto-prune at startup |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` | unset | Pinned sampling parameters (provider default when unset); part of the agent version |
+| `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `60` / `2` | Per-call deadline and SDK retries (rate limits, 5xx, connection errors); part of the agent version |
+| `MCP_WRITE_TIMEOUT_SECONDS` | `30` | Deadline for one MCP report write, including spawning the server |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | unset | Optional Langfuse tracing; a no-op unless both keys are set |
 
 Other tunables (`anthropic_model` / `openai_model` names, defaults `claude-sonnet-5-5` /

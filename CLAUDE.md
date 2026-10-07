@@ -33,8 +33,12 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
   state update. State schema lives in `state.py`; add fields there first.
 - `pytest` is hermetic: fake LLMs, no network, no seeded vector store, no API key.
   A test that needs a real model belongs in the eval suite, not in `tests/`.
-- Supervisor routing is in `agents/supervisor/router.py` (`decide_next_step`,
-  `route_from_supervisor`). New routes need the conditional-edge map in `graph.py`.
+- Supervisor routing is in `agents/supervisor/router.py` (`decide_route`,
+  `route_from_supervisor`). New routes need the conditional-edge map in `graph.py`. The
+  `planner` node runs before the first supervisor decision; `tests/conftest.py` stubs
+  `run_planner` with the one-item fallback plan so graph tests stay offline.
+- A fresh run's input comes from `state.new_run_state()`; a new `AgentState` field must be
+  reset there (`tests/graph/test_state.py` fails otherwise).
 - Retrieval code (query rewriting, retriever, reranker) lives in `retrieval/`; the
   research node in `agents/research/` only orchestrates it. Guardrails (input validation,
   output filters, shared regex patterns, audit log) are in `security/`; a node that blocks,

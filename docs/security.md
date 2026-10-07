@@ -17,10 +17,13 @@ no external moderation service, no measurable latency.
 | Retrieval | Cross-encoder score floor (`RERANK_SCORE_FLOOR`, default -8.0) | `retrieval/reranker.py` | Low-scoring chunks dropped; an off-topic objective (nothing above the floor) ends the run after one Research pass with a "no relevant material" error |
 | Retrieval | Injection-pattern scan on every kept chunk | `agents/research/node.py::filter_injected_chunks` | Chunk dropped, one `retrieval` event naming the source file |
 | Tool | Analytics tools are fixed math functions, no code execution | `agents/analytics/tools.py` | n/a |
+| Tool | Every numeric tool input must appear in the findings (same 1% tolerance, values >= 10) | `agents/analytics/node.py::tool_input_events`, `security/output_filters.py::ungrounded_inputs` | Result kept, one `tool / ungrounded_tool_input` event; its output no longer counts as evidence for the report |
+| Prompt | Retrieved findings are fenced as data in both the analytics and reporting prompts, closing tags escaped | `security/fencing.py` | n/a (prevention) |
+| Harness | Timeout and SDK retries on every model call; timeout on the MCP write | `llm.py`, `agents/reporting/node.py` | A stalled call fails the step; the error is labelled transient and the run ends cleanly |
 | Tool | MCP server writes `.md` only, inside `REPORTS_DIR`, filename <= 128 chars, content <= 256 KB | `mcp_server/fs_server.py` | Tool call errors; nothing written |
 | Output | PII redaction (email, phone, card, SSN-shaped) | `security/output_filters.py::redact_pii` | Replaced with `[email redacted]` etc.; `output` event |
 | Output | Credential scrub (`sk-`, `sk-ant-`, `lsv2_`, `AKIA`, key=value shapes) | `security/output_filters.py::scrub_secrets` | Replaced with `[secret removed]`; `output` event |
-| Output | Number grounding: every figure >= 10 must match a research finding or analytics value within 1% | `security/output_filters.py::flag_unverified_numbers` | Figure gets ` [unverified]`; warning shown at the approval prompt |
+| Output | Number grounding: every figure >= 10 must match a number in the findings, or the output of an analytics call whose inputs came from the findings, within 1% | `security/output_filters.py::flag_unverified_numbers` | Figure gets ` [unverified]`; warning shown at the approval prompt |
 | Output | Human approval interrupt before any disk write, max 3 review rounds | `agents/reporting/node.py` | Reviewer approves, rejects with feedback, or discards |
 | Policy | Append-only audit log (`AUDIT_LOG_PATH`, default `data/audit.jsonl`) | `security/audit.py`, written by the supervisor at FINISH and by the CLI per human decision | One JSON line: objective, route trace, counts, error, guardrail events, decision |
 | Policy | Error boundaries on every node, recursion and visit caps | `guardrails.py`, `graph.py`, `agents/supervisor/router.py` | Run degrades to an `error` state instead of crashing or looping |
@@ -49,8 +52,9 @@ and applies to both the objective and the retrieved chunks.
   the configured LLM provider (Anthropic or OpenAI) and, if enabled, LangSmith tracing. If
   real customer documents are ever ingested, review the provider's data-retention terms
   and consider disabling `LANGCHAIN_TRACING_V2`.
-- What stays local: the vector store, checkpoints, reports and the audit log. Retention is
-  manual: delete `data/checkpoints.sqlite*`, `data/audit.jsonl` and `reports/` to purge.
+- What stays local: the vector store, checkpoints, reports and the audit log. The audit log
+  and checkpoints are pruned automatically (see Retention below); reports are kept until you
+  delete them from `reports/`.
 - Secrets: `.env` is never read or written by the agents. Credential-shaped strings are
   scrubbed from reports and from audit entries.
 

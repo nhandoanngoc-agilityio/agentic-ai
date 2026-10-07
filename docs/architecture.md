@@ -211,3 +211,83 @@ Gradio handlers are generators: `run_with_progress` runs the whole run on one wo
 queue to a "Working…" chat turn. The approval row gained Discard (`{"discard": True}`), which the
 graph already supported for the comparison UI.
 
+## 2026-10-06 — Planning, coverage-driven routing, and harness fixes
+
+Follows an audit of the project as an agentic system: the harness was strong, but the
+supervisor mostly picked among 2–3 options that code had already narrowed, and recorded no
+reason. Changes, in the order they landed:
+
+- **CI**: `.gitlab-ci.yml` had been emptied again (the 2026-10-02 entry above no longer held).
+  Restored with `ruff check`, `ruff format --check`, `basedpyright` and `pytest --cov`.
+- **Harness**: `run_graph` no longer crashes when a resume hits the recursion limit (it spread a
+  `Command` as if it were state; basedpyright had flagged this and it sat in the baseline).
+  One `new_run_state()` replaces three diverging builders. The visit cap reads a
+  `supervisor_visits` counter instead of counting messages, and the CLI refuses a
+  `--thread-id` that already has a run. Model calls get an explicit timeout and SDK retries,
+  and the MCP write a timeout. The error boundary labels each failure with its exception type
+  and whether it was transient, and the harvester tags transient ones `transient_error`.
+  Retries stay at the call level on purpose: retrying a node would repeat tool calls already
+  made, or the approval interrupt.
+- **Grounding**: analytics tool arguments no longer count as evidence for the report (an
+  invented input used to ground itself and its result). Inputs not found in the findings
+  raise `ungrounded_tool_input`. Analytics now fences findings like Reporting
+  (`security/fencing.py`). Tools take a `label`, so the report names metrics.
+- **Planner + coverage-driven supervisor**: a `planner` node (`input_guard → planner →
+  supervisor`) writes 2–4 sub-questions. Each LLM supervisor decision returns a rationale,
+  coverage per item (validated against the findings' sources) and the item to research next.
+  Research is offered only while an item is open. A targeted pass that adds nothing marks only
+  that item unanswerable. Reporting lists unanswered items under "Open questions". Every route
+  is a `route_decision` audit event with `decided_by` (`rule`, `llm`, `fallback`).
+- **Evals**: the supervisor cases now each have one right answer (the old ones passed for any
+  allowed choice). New `planning` and `trajectory` categories (the trajectory reuses the
+  full-pipeline run and its `route_decision` events). The analytics case checks inputs are
+  grounded, a reporting case checks reviewer feedback is acted on, and a safety case checks that
+  invented tool inputs are flagged. Hermetic graph tests cover a transient failure mid-run and
+  an MCP write timeout after approval.
+
+The baseline in `evals/baseline.json` predates all of this; it needs a
+`run_evals.py --repeats 3 --update-baseline` run (paid).
+
+### Same day — first gate run of the planner: a research loop
+
+The first `run_evals.py --repeats 3` after the planner failed the gate on baseline
+`task_success` (0.905 vs 1.0) and `latency_p95_ms` (41.8 s vs 27.3 s, limit +25%). Every one
+of the 9 graph runs went `research ×6` until the visit cap forced Analytics: no plan item was
+ever judged answered, and the same item was often retargeted. Causes and fixes:
+
+- The supervisor anchored on items shown as `[open]` and could skip `coverage` (it had a
+  default). Open items are now shown as "to judge", `coverage` is required, and the prompt says
+  an item is answered when the findings state its facts, estimates and ranges included. This
+  was also the failing `plan_covered_analysis_done` case (2 of 3 repeats chose research).
+- The supervisor saw 160 characters per finding; real chunks run to 800, so the answering
+  figure was often cut off. Now 500.
+- A sub-question only became unanswerable when a targeted pass added nothing, which a small
+  corpus rarely produces. Each item now gets one targeted search (`attempted`); Research is
+  offered only while an open item hasn't had it. This bounds research passes at plan items + 1
+  regardless of the model's judgment.
+- The planner wrote comparison and benchmark questions the corpus can't answer (the failing
+  `planning` case). It now writes 2–4 single-document questions and never phrases comparisons.
+- The trajectory check passed all of this. It now also fails when the visit cap fires or a
+  sub-question is targeted twice.
+
+### Same day — second gate run: an analytics loop
+
+With research bounded, the next run (`task_success` 0.833, p95 42.3 s) showed every graph run
+going `analytics(rule) > analytics(llm|fallback) [> analytics]` until the visit cap forced
+Reporting. Analytics is the slowest node (5–9 s), so the repeats were most of the regression.
+
+- Analytics is offered again only when the findings changed since it last ran (Research bumps
+  `findings_version`; Analytics records `analyzed_findings_version`).
+- The decision schema is built per call with `next` limited to the allowed steps, and an
+  invalid choice now falls forward (`allowed[-1]`, as the exception path already did) rather
+  than back to `allowed[0]`, which had re-run Analytics.
+- With one step left, code still decides by rule, unless a plan item is open: then the model
+  is asked (its choice limited to that step) so the last targeted search gets judged and a
+  found answer isn't reported as an open question.
+- The visit cap moved from 6 to 8: with at most 4 targeted searches and Analytics only on new
+  findings, a run legitimately needs up to 7 decisions, so the cap is a safety net again.
+- The supervisor prompt says a range or estimate is an answer (the model kept Globex's
+  "$150K–$400K" open "for precision"). The supervisor eval now fails a route reached by
+  fallback, and the planning check flags only questions phrased as comparisons, not a
+  market question that names both companies as context.
+
