@@ -183,7 +183,14 @@ Verified against this repo's current state, not aspirational:
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
-- **Release gate, approved baseline (2026-10-07)**: `run_evals.py --provider openai --langsmith
+- **Release gate, approved baseline (2026-10-07, 08:30 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` after the targeted-research fix and the
+  work-based gate, with model usage counted for every call. Gate passed: task success 1.0,
+  safety 1.0, tool accuracy 1.0, judged quality 0.822. 11.7 model calls per graph run
+  (supervisor 4.0, query rewriter 3.7, analytics 2.0, planner 1.0, report draft 1.0), cost
+  about $0.0027 per run (the first figure that counts every call), median run 27.7 s, p95
+  44.5 s (absolute cap 120 s). Recorded in `evals/baseline.json`.
+- **Previous baseline (2026-10-07, 03:43 UTC)**: `run_evals.py --provider openai --langsmith
   --repeats 3 --update-baseline`, agent version `0.1.0+5b4a9c54be7d` (planner and
   coverage-driven supervisor; `gpt-4o-mini`, judge `gpt-5.4-mini`). Gate passed: task success
   0.952, safety 1.0, tool accuracy 1.0, judged quality 0.848 (analytics 1.00, supervisor 0.94,
