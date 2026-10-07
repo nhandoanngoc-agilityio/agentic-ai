@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # either way the value is recorded in the agent manifest (versioning.py).
     llm_temperature: float | None = None
     llm_max_tokens: int | None = None
+    # Per-request deadline and SDK-level retries (rate limits, 5xx, connection
+    # errors, with backoff) for every model call. Retrying the call rather than
+    # the node keeps work a node already finished (e.g. earlier tool calls in
+    # the analytics loop) from running twice. 2 retries = both SDKs' default.
+    llm_timeout_seconds: float = 60.0
+    llm_max_retries: int = 2
+    # Deadline for one MCP report write, including spawning the server.
+    mcp_write_timeout_seconds: float = 30.0
     reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     # Cross-encoder logit floor for retrieval. Measured on the seeded index

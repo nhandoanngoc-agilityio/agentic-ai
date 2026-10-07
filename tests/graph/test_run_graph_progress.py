@@ -106,6 +106,7 @@ def test_streamed_run_pauses_with_the_same_state_and_interrupt_as_invoke() -> No
     assert _comparable(streamed) == _comparable(plain)
     assert steps == [
         "input_guard",
+        "planner",
         "supervisor",
         "research",
         "supervisor",

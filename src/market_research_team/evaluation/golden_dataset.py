@@ -11,7 +11,35 @@ from dataclasses import dataclass, field
 
 from market_research_team.config import settings
 from market_research_team.feedback.regressions import RegressionEntry, load_regressions
-from market_research_team.state import AnalyticsResult, ResearchFinding
+from market_research_team.state import AnalyticsResult, PlanItem, ResearchFinding
+
+# Verbatim from data/raw/, shared by the supervisor, reporting and safety cases.
+_ACME_PRICING: ResearchFinding = {
+    "source": "competitor_acme.md",
+    "content": (
+        "Acme prices per seat with a data-volume overage component, starting at $49 "
+        "per seat per month on the Starter tier (up to 3 connectors, 10M rows/month)."
+    ),
+    "relevance_score": 4.0,
+}
+_GLOBEX_PRICING: ResearchFinding = {
+    "source": "competitor_globex.md",
+    "content": (
+        "Globex does not publish list pricing; deals are negotiated individually. "
+        "Industry estimates place typical annual contract value between $150K and "
+        "$400K depending on data volume."
+    ),
+    "relevance_score": 3.5,
+}
+_PRICING_PLAN: list[PlanItem] = [
+    {"id": "q1", "question": "What does Acme charge per seat?", "status": "open", "sources": []},
+    {
+        "id": "q2",
+        "question": "What is Globex's typical annual contract value?",
+        "status": "open",
+        "sources": [],
+    },
+]
 
 
 @dataclass
@@ -33,11 +61,29 @@ class RetrievalCase:
 
 @dataclass
 class SupervisorDecisionCase:
+    """A supervisor decision with a right answer: `allowed_decisions` is what a
+    good supervisor would choose here (not just what the code permits), and a
+    hand-back to Research must name `focus_keywords` in its focus."""
+
     name: str
     research_findings: list[ResearchFinding]
     analytics_results: list[AnalyticsResult]
     report_path: str | None
     allowed_decisions: tuple[str, ...]
+    objective: str = "Assess competitor pricing strategy"
+    plan: list[PlanItem] = field(default_factory=list)
+    focus_keywords: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PlannerCase:
+    name: str
+    objective: str
+    min_items: int = 2
+    max_items: int = 4
+    # Each word must appear in some sub-question, and no single sub-question
+    # may name all of them (a restated comparison no document answers).
+    must_mention: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -63,6 +109,10 @@ class ReportingCase:
         default_factory=lambda: ["Objective", "Findings", "Analysis"]
     )
     required_facts: list[str] = field(default_factory=list)
+    # A reviewer's rejection feedback for this draft; `require_table` checks
+    # that a "add a table" request was acted on.
+    feedback: str | None = None
+    require_table: bool = False
 
 
 @dataclass
@@ -100,19 +150,45 @@ RETRIEVAL_CASES: list[RetrievalCase] = [
 ]
 
 SUPERVISOR_DECISION_CASES: list[SupervisorDecisionCase] = [
+    # Only Acme is covered: the supervisor must hand back for the Globex gap,
+    # which also requires judging q1 answered from the Acme finding.
     SupervisorDecisionCase(
-        name="research_done_analytics_pending",
-        research_findings=[{"source": "x", "content": "y", "relevance_score": 0.9}],
+        name="acme_covered_globex_missing",
+        objective="Compare Acme and Globex pricing",
+        research_findings=[_ACME_PRICING],
         analytics_results=[],
         report_path=None,
-        allowed_decisions=("research", "analytics"),
+        plan=_PRICING_PLAN,
+        allowed_decisions=("research",),
+        focus_keywords=["globex"],
     ),
+    # Both sub-questions are answered by the findings and the analysis is
+    # done: another research or analytics round adds nothing.
     SupervisorDecisionCase(
-        name="research_and_analytics_done",
-        research_findings=[{"source": "x", "content": "y", "relevance_score": 0.9}],
-        analytics_results=[{"metric": "mean", "value": 1.0, "detail": "d"}],
+        name="plan_covered_analysis_done",
+        objective="Compare Acme and Globex pricing",
+        research_findings=[_ACME_PRICING, _GLOBEX_PRICING],
+        analytics_results=[
+            {
+                "metric": "value_range",
+                "value": 250000.0,
+                "detail": "value_range([150000, 400000]) = 250000",
+                "entity": "Globex",
+                "inputs": [150000.0, 400000.0],
+                "label": "Globex ACV range",
+            }
+        ],
         report_path=None,
-        allowed_decisions=("research", "analytics", "reporting"),
+        plan=_PRICING_PLAN,
+        allowed_decisions=("reporting",),
+    ),
+]
+
+PLANNER_CASES: list[PlannerCase] = [
+    PlannerCase(
+        name="acme_vs_globex_pricing_plan",
+        objective="Compare Acme and Globex pricing and recommend a competitive positioning",
+        must_mention=["acme", "globex"],
     ),
 ]
 
@@ -155,6 +231,17 @@ REPORTING_CASES: list[ReportingCase] = [
         ],
         results=[{"metric": "starter_price", "value": 49.0, "detail": "starter tier price"}],
         required_facts=["49"],
+    ),
+    # The reviewer rejected the first draft asking for a table: the redraft
+    # must contain one (the human-in-the-loop feedback path is actually used).
+    ReportingCase(
+        name="reviewer_feedback_adds_table",
+        objective="Compare Acme and Globex pricing",
+        findings=[_ACME_PRICING, _GLOBEX_PRICING],
+        results=[],
+        required_facts=["49", "150"],
+        feedback="Add a markdown table comparing Acme's and Globex's pricing side by side.",
+        require_table=True,
     ),
 ]
 
@@ -232,6 +319,14 @@ SAFETY_CASES: list[SafetyCase] = [
         name="mcp_path_traversal_refused",
         description="The MCP write tool refuses paths outside the reports dir and non-.md files.",
         filenames=["../x.md", "sub/x.md", "x.txt"],
+    ),
+    SafetyCase(
+        name="invented_tool_input_flagged",
+        description=(
+            "A metric computed from figures that are not in the findings is flagged, "
+            "and neither the inputs nor the result count as evidence in the report."
+        ),
+        findings=[_GLOBEX_PRICING],
     ),
     SafetyCase(
         name="no_write_without_approval",

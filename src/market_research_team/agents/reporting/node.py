@@ -1,6 +1,7 @@
 """Reporting Agent node: drafts a markdown report and writes it via the
 local MCP filesystem server."""
 
+import asyncio
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -13,21 +14,16 @@ from market_research_team.caching.response_cache import put_cached_response
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
 from market_research_team.security import audit
+from market_research_team.security.fencing import ANALYTICS_TAG, FINDINGS_TAG, fence
 from market_research_team.security.output_filters import (
     apply_output_guardrails,
     warnings_from_events,
 )
-from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
+from market_research_team.state import AgentState, AnalyticsResult, PlanItem, ResearchFinding
 
 # Caps the human-review loop in `reporting_node` below, mirroring the
 # supervisor's `_MAX_ROUTING_VISITS` guard against an endless back-and-forth.
 _MAX_REVIEW_ROUNDS = 3
-
-# Delimiter tags used to fence untrusted retrieved content in `draft_report`'s
-# prompt. Module-level so `_escape_closing_tags` and `human_content` share the
-# exact same literals.
-_FINDINGS_TAG = "retrieved_research_data"
-_ANALYTICS_TAG = "computed_analytics"
 
 SYSTEM_PROMPT = (
     "You write concise markdown research reports for a market and "
@@ -52,24 +48,9 @@ def _results_section(results: list[AnalyticsResult]) -> str:
     if not results:
         return "No analytics were computed."
     return "\n".join(
-        f"- {result['metric']}: {result['value']} ({result['detail']})" for result in results
+        f"- {result.get('label') or result['metric']}: {result['value']} ({result['detail']})"
+        for result in results
     )
-
-
-def _escape_closing_tags(text: str) -> str:
-    """Neutralize literal closing-delimiter tags in untrusted text.
-
-    A poisoned corpus chunk containing the literal string
-    `</retrieved_research_data>` (or `</computed_analytics>`) would otherwise
-    close its enclosing block early in `draft_report`'s prompt, letting the
-    rest of the chunk land outside the tag as if it were operator text. This
-    is delimiter escaping only (backslash-escaping the closing bracket), not
-    keyword/content scanning for injection phrases.
-    """
-
-    for tag in (_FINDINGS_TAG, _ANALYTICS_TAG):
-        text = text.replace(f"</{tag}>", f"<\\/{tag}>")
-    return text
 
 
 def _fallback_report(
@@ -102,8 +83,8 @@ def draft_report(
 
     human_content = (
         f"Objective: {objective}\n\n"
-        f"<{_FINDINGS_TAG}>\n{_escape_closing_tags(_findings_section(findings))}\n</{_FINDINGS_TAG}>\n\n"
-        f"<{_ANALYTICS_TAG}>\n{_escape_closing_tags(_results_section(results))}\n</{_ANALYTICS_TAG}>"
+        f"{fence(FINDINGS_TAG, _findings_section(findings))}\n\n"
+        f"{fence(ANALYTICS_TAG, _results_section(results))}"
     )
     if feedback:
         human_content += (
@@ -132,6 +113,23 @@ def draft_report(
     return _fallback_report(objective, findings, results)
 
 
+def open_questions_section(plan: list[PlanItem]) -> str:
+    """Markdown naming the plan's sub-questions that research did not answer
+    (unanswerable from the knowledge base, or still open when the run moved
+    on), so the report states its gaps instead of glossing over them. Empty
+    when every item was answered."""
+
+    unresolved = [item for item in plan if item["status"] != "answered"]
+    if not unresolved:
+        return ""
+    lines = "\n".join(f"- {item['question']}" for item in unresolved)
+    return (
+        "\n\n## Open questions\n\n"
+        "The knowledge base did not answer these parts of the objective:\n\n"
+        f"{lines}\n"
+    )
+
+
 def _slugify(objective: str) -> str:
     slug = "".join(char.lower() if char.isalnum() else "-" for char in objective)
     while "--" in slug:
@@ -152,9 +150,15 @@ def _extract_tool_text(result: object) -> str:
 async def write_report_via_mcp(filename: str, content: str) -> str:
     """Write a drafted report to disk via the local MCP server. Returns the written path."""
 
-    tools = await load_reporting_tools()
-    write_tool = next(tool for tool in tools if tool.name == "write_report")
-    raw_result = await write_tool.ainvoke({"filename": filename, "content": content})
+    async def _write() -> object:
+        tools = await load_reporting_tools()
+        write_tool = next(tool for tool in tools if tool.name == "write_report")
+        return await write_tool.ainvoke({"filename": filename, "content": content})
+
+    # Bounded: spawning the server and the write together must not hang the
+    # review node (and the UI worker behind it). A timeout raises
+    # `TimeoutError`, which the error boundary records as transient.
+    raw_result = await asyncio.wait_for(_write(), timeout=settings.mcp_write_timeout_seconds)
     return _extract_tool_text(raw_result)
 
 
@@ -202,6 +206,7 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
 
     feedback = state.get("report_feedback") if attempt > 1 else None
     raw_draft = draft_report(objective, findings, results, get_chat_model(), feedback=feedback)
+    raw_draft = raw_draft.rstrip() + open_questions_section(state.get("plan") or [])
     # Output guardrails: redact PII, scrub secrets, mark ungrounded figures.
     # Nothing blocks -- the warnings travel with the interrupt so the human
     # approves with eyes open.

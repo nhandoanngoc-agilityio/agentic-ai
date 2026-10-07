@@ -24,7 +24,7 @@ from market_research_team.graph import StepCallback, run_graph
 from market_research_team.observability import record_feedback_score
 from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
-from market_research_team.state import AgentState
+from market_research_team.state import AgentState, new_run_state
 
 T = TypeVar("T")
 
@@ -33,20 +33,6 @@ _STEP_LABELS = {
     "input_guard": "Objective checked.",
     "reporting": "Report drafted and run through the output checks.",
 }
-
-
-def _initial_state(objective: str) -> AgentState:
-    return {
-        "messages": [],
-        "objective": objective,
-        "next": "research",
-        "research_findings": [],
-        "analytics_results": [],
-        "report_path": None,
-        "error": None,
-        "report_discarded": False,
-        "guardrail_events": [],
-    }
 
 
 def _render_result_turn(result: AgentState) -> str:
@@ -184,7 +170,7 @@ def submit_objective(
 
     try:
         result = run_graph(
-            _initial_state(objective),
+            new_run_state(objective),
             compiled_graph=compiled_graph,
             thread_id=thread_id,
             on_step=on_step,

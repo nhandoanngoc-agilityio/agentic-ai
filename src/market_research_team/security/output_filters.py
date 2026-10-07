@@ -38,15 +38,27 @@ def _token_value(match: re.Match[str]) -> float:
     return value * _MAGNITUDES.get(suffix, 1.0)
 
 
-def _evidence_values(findings: list[ResearchFinding], results: list[AnalyticsResult]) -> set[float]:
+def _finding_values(findings: list[ResearchFinding]) -> set[float]:
     values: set[float] = set()
     for finding in findings:
         for match in _NUMBER_TOKEN.finditer(finding["content"]):
             values.add(_token_value(match))
+    return values
+
+
+def _evidence_values(findings: list[ResearchFinding], results: list[AnalyticsResult]) -> set[float]:
+    """Numbers a report may state: those in the findings, plus the output of
+    every analytics result whose own inputs came from the findings.
+
+    The tool arguments themselves are never evidence -- the model chose them,
+    so counting them would let an invented input vouch for itself (and for
+    whatever was computed from it).
+    """
+
+    values = _finding_values(findings)
     for result in results:
-        values.add(float(result["value"]))
-        for match in _NUMBER_TOKEN.finditer(result["detail"]):
-            values.add(_token_value(match))
+        if not ungrounded_inputs(result.get("inputs", []), findings, evidence=values):
+            values.add(float(result["value"]))
     return values
 
 
@@ -61,6 +73,23 @@ def _is_grounded(value: float, evidence: set[float]) -> bool:
         if abs(candidate - value) <= 0.05:
             return True
     return False
+
+
+def ungrounded_inputs(
+    inputs: list[float],
+    findings: list[ResearchFinding],
+    *,
+    evidence: set[float] | None = None,
+) -> list[float]:
+    """The tool inputs (>= 10, like the report check) that match no number in
+    the findings: figures the analytics model supplied rather than read."""
+
+    known = _finding_values(findings) if evidence is None else evidence
+    return [
+        value
+        for value in inputs
+        if abs(value) >= _MIN_CHECKED_VALUE and not _is_grounded(abs(value), known)
+    ]
 
 
 def redact_pii(text: str) -> tuple[str, list[GuardrailEvent]]:

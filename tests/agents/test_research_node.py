@@ -104,3 +104,42 @@ def test_empty_first_pass_ends_the_run_with_an_error(monkeypatch: pytest.MonkeyP
 
     assert "no relevant material" in update["error"]
     assert isinstance(update["messages"][0], AIMessage)
+
+
+def test_targeted_hand_back_that_adds_nothing_marks_only_that_item_unanswerable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = [_finding("a", 1.0)]
+    _stub_pipeline(monkeypatch, existing)
+    state = _state(existing, focus="Globex churn")
+    state["research_focus_id"] = "q2"
+    state["plan"] = [
+        {"id": "q1", "question": "Acme price?", "status": "answered", "sources": ["acme.md"]},
+        {"id": "q2", "question": "Globex churn?", "status": "open", "sources": []},
+        {"id": "q3", "question": "Market size?", "status": "open", "sources": []},
+    ]
+
+    update = research_node(state)
+
+    assert [item["status"] for item in update["plan"]] == ["answered", "unanswerable", "open"]
+    assert "research_exhausted" not in update
+    assert "q2 unanswerable" in update["messages"][0].content
+    assert update["research_focus_id"] is None
+
+
+def test_targeted_hand_back_marks_its_item_searched_even_when_it_adds_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_pipeline(monkeypatch, [_finding("new globex fact", 2.0, source="globex.md")])
+    state = _state([_finding("a", 1.0)], focus="Globex ACV?")
+    state["research_focus_id"] = "q2"
+    state["plan"] = [
+        {"id": "q1", "question": "Acme price?", "status": "open", "sources": []},
+        {"id": "q2", "question": "Globex ACV?", "status": "open", "sources": []},
+    ]
+
+    update = research_node(state)
+
+    q1, q2 = update["plan"]
+    assert q2 == {**state["plan"][1], "attempted": True}  # still open: the supervisor judges it
+    assert "attempted" not in q1

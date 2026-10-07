@@ -126,6 +126,7 @@ def test_supervisor_visits_agents_in_order() -> None:
     agent_names = [m.name for m in result["messages"] if getattr(m, "name", None)]
 
     assert agent_names == [
+        "planner",
         "supervisor",
         "research_agent",
         "supervisor",

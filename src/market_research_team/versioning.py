@@ -72,11 +72,13 @@ def git_sha() -> str:
 
 def _instructions() -> dict[str, str]:
     from market_research_team.agents.analytics import node as analytics
+    from market_research_team.agents.planner import node as planner
     from market_research_team.agents.reporting import node as reporting
     from market_research_team.agents.supervisor import router
     from market_research_team.retrieval import query_rewriter
 
     return {
+        "planner": _digest(planner.SYSTEM_PROMPT),
         "supervisor": _digest(router.SYSTEM_PROMPT),
         "query_rewriter": _digest(query_rewriter.SYSTEM_PROMPT),
         "analytics": _digest(analytics.SYSTEM_PROMPT),
@@ -137,6 +139,7 @@ def _knowledge_static() -> dict[str, Any]:
 
 def _memory_safety() -> dict[str, Any]:
     from market_research_team.agents.analytics import node as analytics
+    from market_research_team.agents.planner import node as planner
     from market_research_team.agents.reporting import node as reporting
     from market_research_team.agents.supervisor import router
     from market_research_team.security import input_validation, output_filters, patterns
@@ -149,7 +152,11 @@ def _memory_safety() -> dict[str, Any]:
         "response_cache_ttl_seconds": settings.response_cache_ttl_seconds,
         "cache_policy_version": settings.cache_policy_version,
         "recursion_limit": settings.recursion_limit,
+        "llm_timeout_seconds": settings.llm_timeout_seconds,
+        "llm_max_retries": settings.llm_max_retries,
+        "mcp_write_timeout_seconds": settings.mcp_write_timeout_seconds,
         "max_routing_visits": router._MAX_ROUTING_VISITS,
+        "max_plan_items": planner._MAX_PLAN_ITEMS,
         "supervisor_finding_snippet_chars": router._FINDING_SNIPPET_CHARS,
         "max_tool_iterations": analytics._MAX_TOOL_ITERATIONS,
         "max_review_rounds": reporting._MAX_REVIEW_ROUNDS,

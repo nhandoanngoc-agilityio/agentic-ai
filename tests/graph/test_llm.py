@@ -98,3 +98,19 @@ def test_get_chat_model_falls_back_to_the_environment_without_a_settings_key(
     llm = get_chat_model(provider="anthropic", model="claude-opus-5")
 
     assert llm.bound.anthropic_api_key.get_secret_value() == "sk-ant-fake-from-shell"
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_get_chat_model_always_pins_timeout_and_retries(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """A call with no deadline can hang a run; both providers get one."""
+
+    monkeypatch.setattr(settings, "llm_timeout_seconds", 12.5)
+    monkeypatch.setattr(settings, "llm_max_retries", 4)
+
+    client = getattr(get_chat_model(provider=provider, model="m"), "bound")
+
+    timeout = client.request_timeout if provider == "openai" else client.default_request_timeout
+    assert timeout == 12.5
+    assert client.max_retries == 4

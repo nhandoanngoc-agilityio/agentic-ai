@@ -31,8 +31,13 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
     callback itself.
     """
 
-    # Only pass parameters that are pinned, so unset ones keep the provider default.
-    params: dict[str, float | int | str] = {}
+    # Timeout and retries are always pinned (a call with no deadline can hang a
+    # run); sampling parameters only when set, so unset ones keep the provider
+    # default.
+    params: dict[str, float | int | str] = {
+        "timeout": settings.llm_timeout_seconds,
+        "max_retries": settings.llm_max_retries,
+    }
     if settings.llm_temperature is not None:
         params["temperature"] = settings.llm_temperature
     if settings.llm_max_tokens is not None:

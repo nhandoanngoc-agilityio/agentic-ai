@@ -1,3 +1,4 @@
+import pytest
 from langchain_core.messages import AIMessage
 
 from market_research_team.agents.supervisor import router as router_module
@@ -50,9 +51,8 @@ def _state(
     from_response_cache: bool = False,
 ) -> AgentState:
     state: AgentState = {
-        "messages": [
-            AIMessage(content="Routing.", name="supervisor") for _ in range(supervisor_visits)
-        ],
+        "messages": [],
+        "supervisor_visits": supervisor_visits,
         "objective": "Assess competitor pricing strategy",
         "next": "research",
         "research_findings": research_findings or [],
@@ -136,7 +136,7 @@ def test_asks_llm_to_choose_among_all_three_once_analytics_done() -> None:
     assert decide_next_step(state, _FakeLLM("research")) == "research"  # type: ignore[arg-type]
 
 
-def test_clamps_invalid_llm_choice_to_the_safe_default(monkeypatch) -> None:
+def test_an_invalid_llm_choice_moves_forward_not_back(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(
         router_module.audit,
@@ -147,7 +147,8 @@ def test_clamps_invalid_llm_choice_to_the_safe_default(monkeypatch) -> None:
 
     result = decide_next_step(state, _FakeLLM("reporting"))  # type: ignore[arg-type]
 
-    assert result == "research"
+    # Allowed: research, analytics. Repeating an earlier step is what loops.
+    assert result == "analytics"
     assert len(calls) == 1
     assert calls[0]["component"] == "supervisor_router"
     assert calls[0]["reason"].startswith("invalid_llm_choice:")
@@ -231,15 +232,17 @@ def test_focus_is_dropped_when_not_routing_to_research() -> None:
     llm = _CapturingFocusLLM("analytics", "stray focus")
     route = decide_route(_state(research_findings=[_FINDING]), llm)  # type: ignore[arg-type]
 
-    assert route == ("analytics", None)
+    assert route.next == "analytics"
+    assert route.research_focus is None
 
 
 def test_exhausted_research_is_not_offered_again() -> None:
     state = _state(research_findings=[_FINDING], analytics_results=[_RESULT])
     state["research_exhausted"] = True
 
-    # Only analytics/reporting remain; an LLM that still says research is clamped.
-    assert decide_next_step(state, _FakeLLM("research")) == "analytics"  # type: ignore[arg-type]
+    # Analytics already covered these findings, so reporting is all that is
+    # left: code decides without asking the model.
+    assert decide_next_step(state, _ExplodingLLM()) == "reporting"  # type: ignore[arg-type]
 
 
 def test_exhausted_research_with_one_option_left_skips_the_llm() -> None:
@@ -247,3 +250,59 @@ def test_exhausted_research_with_one_option_left_skips_the_llm() -> None:
     state["research_exhausted"] = True
 
     assert decide_next_step(state, _ExplodingLLM()) == "analytics"  # type: ignore[arg-type]
+
+
+def test_visit_cap_reads_the_counter_not_the_message_log() -> None:
+    """`messages` is a log: a long one (e.g. a reused thread) must not trip the cap."""
+
+    state = _state(research_findings=[_FINDING])
+    state["messages"] = [
+        AIMessage(content="Routing.", name="supervisor")
+        for _ in range(router_module._MAX_ROUTING_VISITS + 2)
+    ]
+
+    result = decide_next_step(state, _FakeLLM("research"))  # type: ignore[arg-type]
+
+    assert result == "research"
+
+
+def test_supervisor_node_increments_the_visit_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        router_module,
+        "run_supervisor_decision",
+        lambda state: router_module.SupervisorRoute("analytics"),
+    )
+    state = _state(research_findings=[_FINDING], supervisor_visits=2)
+
+    update = router_module.supervisor_node(state)
+
+    assert update["supervisor_visits"] == 3
+
+
+def test_analytics_is_offered_again_only_when_findings_changed_since() -> None:
+    current = _state(research_findings=[_FINDING], analytics_results=[_RESULT])
+    current["findings_version"] = current["analyzed_findings_version"] = 2
+    stale = {**current, "findings_version": 3}
+    prompts: list[str] = []
+
+    class _Capture(_FakeLLM):
+        def with_structured_output(self, schema: object) -> _FakeStructuredLLM:
+            prompts.append(str(schema.model_json_schema()["properties"]["next"]))  # type: ignore[attr-defined]
+            return super().with_structured_output(schema)
+
+    decide_next_step(current, _Capture("reporting"))  # type: ignore[arg-type]
+    decide_next_step(stale, _Capture("reporting"))  # type: ignore[arg-type]
+
+    assert "analytics" not in prompts[0]
+    assert "analytics" in prompts[1]
+
+
+def test_the_model_can_only_choose_an_allowed_step() -> None:
+    from market_research_team.agents.supervisor.router import _decision_schema
+
+    schema = _decision_schema(("research", "analytics"))
+
+    assert schema.model_json_schema()["properties"]["next"]["enum"] == ["research", "analytics"]
+    assert schema(next="analytics", coverage=[]).next == "analytics"
+    with pytest.raises(ValueError):
+        schema(next="reporting", coverage=[])

@@ -22,6 +22,7 @@ def test_manifest_covers_every_versioned_part_of_the_agent():
     assert set(manifest["components"]) == _SECTIONS
     assert set(manifest["component_hashes"]) == _SECTIONS
     assert set(manifest["components"]["instructions"]) == {
+        "planner",
         "supervisor",
         "query_rewriter",
         "analytics",

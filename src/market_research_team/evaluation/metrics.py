@@ -71,7 +71,7 @@ def _rate(results: list[EvalResult]) -> float:
     return sum(r.passed for r in results) / len(results) if results else 0.0
 
 
-def _read_audit(path: Path) -> list[dict[str, Any]]:
+def read_audit(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     events = []
@@ -105,7 +105,7 @@ def compute_metrics(
     results: list[EvalResult], audit_path: Path, *, model: str, prices: dict[str, Price]
 ) -> EvalMetrics:
     price = require_price(prices, model)
-    events = _read_audit(audit_path)
+    events = read_audit(audit_path)
 
     task_results = [r for r in results if r.category not in _OWN_METRIC_CATEGORIES]
     quality, quality_by_category, unjudged = _quality(results)

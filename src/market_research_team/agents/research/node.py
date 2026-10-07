@@ -149,8 +149,10 @@ def research_node(state: AgentState) -> dict[str, Any]:
         }
 
     update: dict[str, Any] = {
+        "findings_version": state.get("findings_version", 0) + (1 if added else 0),
         "research_findings": merged,
         "research_focus": None,
+        "research_focus_id": None,
         "guardrail_events": events,
     }
     summary = (
@@ -159,7 +161,20 @@ def research_node(state: AgentState) -> dict[str, Any]:
     )
     if existing:
         summary += f", {added} new (gap: {focus or 'none given'})"
-        if added == 0:
+        focus_id = state.get("research_focus_id")
+        plan = state.get("plan") or []
+        targeted = bool(focus_id) and any(item["id"] == focus_id for item in plan)
+        if targeted:
+            # One targeted search per sub-question. Nothing new means the
+            # knowledge base doesn't hold the answer; other items may still.
+            status_update = {"status": "unanswerable"} if added == 0 else {}
+            update["plan"] = [
+                {**item, "attempted": True, **status_update} if item["id"] == focus_id else item
+                for item in plan
+            ]
+            if added == 0:
+                summary += f" -> {focus_id} unanswerable from the knowledge base"
+        if added == 0 and not targeted:
             # Another pass would search the same index for the same thing:
             # tell the supervisor to stop offering Research.
             update["research_exhausted"] = True

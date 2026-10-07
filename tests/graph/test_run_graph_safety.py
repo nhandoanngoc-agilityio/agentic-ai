@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from market_research_team import graph as graph_module
@@ -120,3 +121,42 @@ def test_run_graph_records_run_latency_on_recursion_limit(
     assert len(run_calls) == 1
     assert run_calls[0]["outcome"] == "recursion_limit"
     assert run_calls[0]["duration_ms"] >= 0
+
+
+def test_recursion_limit_during_a_resume_returns_the_checkpointed_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `Command` has no state of its own: the error state is built from the
+    thread's last checkpoint instead of crashing on `{**Command(...)}`."""
+
+    compiled_graph = build_production_graph(InMemorySaver())
+    thread_id = "recursion-on-resume"
+    paused = run_graph(_initial_state(), compiled_graph=compiled_graph, thread_id=thread_id)
+    assert "__interrupt__" in paused
+
+    def _recurse(*_args: Any) -> None:
+        raise GraphRecursionError("too deep")
+
+    # Where LangGraph trips the limit on a resume is its own business; what is
+    # under test is the shape `run_graph` returns when it does.
+    monkeypatch.setattr(graph_module, "_execute", _recurse)
+    result = run_graph(
+        Command(resume={"approved": True}), compiled_graph=compiled_graph, thread_id=thread_id
+    )
+
+    assert result.get("error") == "Recursion limit reached: too deep"
+    assert result["objective"] == "Assess competitor pricing strategy"
+    assert result["research_findings"]
+
+
+def test_recursion_limit_during_a_resume_without_a_checkpointer_still_returns_an_error() -> None:
+    class _Recursing:
+        def invoke(self, *_args: Any, **_kwargs: Any) -> None:
+            raise GraphRecursionError("too deep")
+
+        def get_state(self, _config: Any) -> None:
+            raise ValueError("No checkpointer set")
+
+    result = run_graph(Command(resume={"approved": True}), compiled_graph=_Recursing())
+
+    assert result == {"error": "Recursion limit reached: too deep"}
