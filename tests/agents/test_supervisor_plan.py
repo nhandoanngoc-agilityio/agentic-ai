@@ -282,3 +282,36 @@ def test_a_redirected_hand_back_says_so_in_the_rationale() -> None:
         "q1 needs more detail. [code: q1 can't be researched again (already searched or"
         " resolved), so researching q2]"
     )
+
+
+def test_run_finished_records_the_run_s_model_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        router_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+    monkeypatch.setattr(router_module.audit, "current_thread_id", lambda: "run-x")
+    monkeypatch.setattr(
+        router_module,
+        "take_run_usage",
+        lambda thread_id: (
+            {"model_calls": 9, "input_tokens": 900, "output_tokens": 90}
+            if thread_id == "run-x"
+            else {}
+        ),
+    )
+    monkeypatch.setattr(
+        router_module,
+        "run_supervisor_decision",
+        lambda state: router_module.SupervisorRoute("FINISH", rationale="done"),
+    )
+
+    router_module.supervisor_node(_state(_plan("answered")))
+
+    (finished,) = [c for c in calls if c["event"] == "run_finished"]
+    assert (finished["model_calls"], finished["input_tokens"], finished["output_tokens"]) == (
+        9,
+        900,
+        90,
+    )

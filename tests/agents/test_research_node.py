@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.agents.research.node import merge_findings, research_node
+from market_research_team.config import settings
 from market_research_team.state import AgentState, ResearchFinding
 
 
@@ -53,7 +54,7 @@ def test_merge_findings_dedupes_sorts_and_counts_new_entries() -> None:
 
 
 def test_merge_findings_caps_the_total_and_drops_lowest_scores() -> None:
-    cap = research_node_module._MAX_FINDINGS
+    cap = settings.run_policy.max_findings
     old = [_finding(f"old{i}", float(i)) for i in range(cap)]
 
     merged, added = merge_findings(old, [_finding("best", 100.0), _finding("worst", -5.0)])

@@ -20,6 +20,7 @@ is configured, mirroring the local latency/fallback-event tracking.
 from __future__ import annotations
 
 import os
+import threading
 from functools import lru_cache
 from typing import Any
 from uuid import UUID
@@ -118,6 +119,34 @@ def flush() -> None:
         _client().flush()
 
 
+# Model usage per graph run (thread), summed in this process by the usage
+# callback and taken by the supervisor's `run_finished` record. In memory, so
+# a run's end doesn't re-read an audit log that grows for 90 days; a run
+# resumed in another process reports only the calls made there.
+_run_usage: dict[str, dict[str, int]] = {}
+_run_usage_lock = threading.Lock()
+
+
+def _add_run_usage(thread_id: str | None, input_tokens: int, output_tokens: int) -> None:
+    if not thread_id:
+        return
+    with _run_usage_lock:
+        totals = _run_usage.setdefault(
+            thread_id, {"model_calls": 0, "input_tokens": 0, "output_tokens": 0}
+        )
+        totals["model_calls"] += 1
+        totals["input_tokens"] += input_tokens
+        totals["output_tokens"] += output_tokens
+
+
+def take_run_usage(thread_id: str | None) -> dict[str, int]:
+    """This run's model calls and tokens so far, removed from the tally."""
+
+    with _run_usage_lock:
+        usage = _run_usage.pop(thread_id, None) if thread_id else None
+    return usage or {"model_calls": 0, "input_tokens": 0, "output_tokens": 0}
+
+
 def component_from_tags(tags: list[str] | None) -> str:
     """The call site's component tag (e.g. "supervisor_router").
 
@@ -157,13 +186,17 @@ class TokenUsageCallbackHandler(BaseCallbackHandler):
                     usage = getattr(message, "usage_metadata", None) if message else None
                     if not usage:
                         continue
+                    thread_id = audit.current_thread_id()
                     audit.record(
                         "llm_usage",
-                        audit.current_thread_id(),
+                        thread_id,
                         component=component,
                         input_tokens=usage.get("input_tokens", 0),
                         output_tokens=usage.get("output_tokens", 0),
                         total_tokens=usage.get("total_tokens", 0),
+                    )
+                    _add_run_usage(
+                        thread_id, usage.get("input_tokens", 0), usage.get("output_tokens", 0)
                     )
         except Exception:
             pass

@@ -357,3 +357,21 @@ Because cost and call counts recorded before and after are not comparable, metri
 `usage_accounting` (1 before, 2 after). The gate compares cost and model calls with a baseline
 only under the same accounting, and warns otherwise; the absolute cost cap still applies. The
 next `--update-baseline` records version 2.
+
+## 2026-10-07 — Harness polish: reports kept, self-check, run usage, RunPolicy
+
+- **No silent overwrite.** Each run writes `<objective slug>-<run id>.md`, the run id a short
+  hash of the thread id (stable across a resumed review, distinct between runs). The MCP
+  `write_report` refuses to replace an existing report with different content unless called
+  with `overwrite=true`; an identical rewrite (a review replayed after a crash) succeeds.
+- **Self-check redraft.** When the output check marks figures it can't trace to the evidence,
+  `reporting_node` redrafts once with a note naming them, before the reviewer sees the draft;
+  what remains travels as warnings. Recorded as a `policy / self_check_redraft` event. Only
+  unverified figures trigger it: section headings are checked by the eval suite.
+- **Run usage in `run_finished`.** The usage callback keeps per-thread totals in memory; the
+  supervisor's `run_finished` line carries `model_calls`, `input_tokens` and `output_tokens`.
+  A run that ends without FINISH drops its tally.
+- **RunPolicy.** The six run limits moved from module constants into `RunPolicy` in
+  `config.py` (overridable as `RUN_POLICY__...`). The manifest keeps the same keys, and the
+  agent version was unchanged by the move (`0.1.0+ac2f6794297e` before and after).
+

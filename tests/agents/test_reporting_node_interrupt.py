@@ -11,7 +11,11 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from market_research_team.agents.reporting import node as reporting_node_module
+from market_research_team.agents.reporting.node import report_filename
+from market_research_team.config import settings
 from market_research_team.state import AgentState
+
+_OBJECTIVE = "Assess competitor pricing strategy"
 
 
 def _initial_state() -> AgentState:
@@ -83,12 +87,12 @@ def test_reporting_node_pauses_before_writing_and_writes_on_approval(
     assert "__interrupt__" in paused
     interrupt_value = paused["__interrupt__"][0].value
     assert interrupt_value["action"] == "write_report"
-    assert interrupt_value["filename"] == "assess-competitor-pricing-strategy.md"
+    assert interrupt_value["filename"] == report_filename(_OBJECTIVE, "t1")
     assert interrupt_value["attempt"] == 1
 
     result = graph.invoke(Command(resume={"approved": True}), config=config)
 
-    assert result["report_path"] == "reports/assess-competitor-pricing-strategy.md"
+    assert result["report_path"] == f"reports/{report_filename(_OBJECTIVE, 't1')}"
     assert result.get("error") is None
     assert "__interrupt__" not in result
 
@@ -152,7 +156,7 @@ def test_reporting_node_ends_run_after_max_review_rounds(
 
     graph = _compiled_graph()
     config: dict[str, Any] = {"configurable": {"thread_id": "t3"}}
-    max_rounds = reporting_node_module._MAX_REVIEW_ROUNDS
+    max_rounds = settings.run_policy.max_review_rounds
 
     result = graph.invoke(_initial_state(), config=config)
     for round_num in range(1, max_rounds + 1):
@@ -245,5 +249,5 @@ async def test_approval_writes_even_when_an_event_loop_is_running(
     graph.invoke(_initial_state(), config=config)
     result = graph.invoke(Command(resume={"approved": True}), config=config)
 
-    assert result["report_path"] == "reports/assess-competitor-pricing-strategy.md"
+    assert result["report_path"] == f"reports/{report_filename(_OBJECTIVE, 't-loop')}"
     assert result.get("error") is None

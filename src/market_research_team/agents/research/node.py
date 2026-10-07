@@ -17,10 +17,6 @@ from market_research_team.state import AgentState, GuardrailEvent, ResearchFindi
 
 _RETRIEVAL_K_PER_QUERY = 4
 _RERANK_TOP_N = 5
-# Cap on findings kept across research passes (each pass adds up to
-# `_RERANK_TOP_N`), so repeated hand-backs can't grow the analytics and
-# report prompts without bound. Lowest-scoring findings are dropped first.
-_MAX_FINDINGS = 10
 
 
 def filter_injected_chunks(
@@ -121,7 +117,7 @@ def merge_findings(
     existing: list[ResearchFinding], new: list[ResearchFinding], *, keep_new: bool = False
 ) -> tuple[list[ResearchFinding], int]:
     """Union of two research passes, deduplicated by (source, content), best
-    score first, capped at `_MAX_FINDINGS`. Returns the merged list and how
+    score first, capped at `RunPolicy.max_findings`. Returns the merged list and how
     many of its entries the new pass contributed.
 
     `keep_new` (a targeted pass): the new findings are kept and the
@@ -130,6 +126,7 @@ def merge_findings(
     the gap-filling chunks the pass was sent for.
     """
 
+    cap = settings.run_policy.max_findings
     by_key = {_finding_key(finding): finding for finding in existing}
     seen = set(by_key)
     for finding in new:
@@ -143,9 +140,9 @@ def merge_findings(
         ordered = [f for f in merged if _finding_key(f) in new_keys] + [
             f for f in merged if _finding_key(f) not in new_keys
         ]
-        kept = {_finding_key(f) for f in ordered[:_MAX_FINDINGS]}
+        kept = {_finding_key(f) for f in ordered[:cap]}
         merged = [f for f in merged if _finding_key(f) in kept]
-    merged = merged[:_MAX_FINDINGS]
+    merged = merged[:cap]
     added = sum(1 for finding in merged if _finding_key(finding) not in seen)
     return merged, added
 

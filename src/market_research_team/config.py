@@ -3,14 +3,48 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+class RunPolicy(BaseModel):
+    """The behavioural limits of one run, in one place: the harness boundary.
+
+    Each is a safety bound around the agent's own decisions, and each is in
+    the agent version manifest (`versioning.py`). Override one from `.env`
+    with a `RUN_POLICY__` prefix, e.g. `RUN_POLICY__MAX_ROUTING_VISITS=10`.
+    """
+
+    # Safety net, not the stopping rule: with one targeted search per plan
+    # item (at most `max_plan_items`) and Analytics only on new findings, a
+    # run needs up to 7 decisions before FINISH (broad research, 4 hand-backs,
+    # analytics, report).
+    max_routing_visits: int = 8
+    # Enough to cover a two-company comparison facet by facet; each item can
+    # cost a research pass and a supervisor call, so more mean a slower run.
+    max_plan_items: int = 4
+    # Model turns in the analytics tool-calling loop (a plain Python loop, not
+    # covered by LangGraph's recursion limit).
+    max_tool_iterations: int = 4
+    # Findings kept across research passes, so repeated hand-backs can't grow
+    # the analytics and report prompts without bound.
+    max_findings: int = 10
+    # Human review rounds before a run that keeps being rejected ends.
+    max_review_rounds: int = 3
+    # Redrafts the agent makes on its own before a human sees a draft, when
+    # the output check finds figures it can't trace to the evidence. One per
+    # review round: a second attempt rarely fixes what the first didn't, and
+    # each costs a full drafting call.
+    max_self_check_redrafts: int = 1
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # `__` separates nested fields in env names: RUN_POLICY__MAX_PLAN_ITEMS.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_nested_delimiter="__")
+
+    run_policy: RunPolicy = Field(default_factory=RunPolicy)
 
     raw_dir: Path = _PROJECT_ROOT / "data" / "raw"
     processed_dir: Path = _PROJECT_ROOT / "data" / "processed"

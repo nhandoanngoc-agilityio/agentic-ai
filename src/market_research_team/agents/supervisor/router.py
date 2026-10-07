@@ -15,14 +15,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END
 from pydantic import BaseModel, Field, create_model
 
+from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
+from market_research_team.observability import take_run_usage
 from market_research_team.security import audit
 from market_research_team.state import AgentState, PlanItem, RouteDecision
 
-# Safety net, not the stopping rule: with one targeted search per plan item
-# (at most 4) and Analytics only on new findings, a run needs up to 7
-# decisions before FINISH (broad research, 4 hand-backs, analytics, report).
-_MAX_ROUTING_VISITS = 8
 # Per-finding snippet length in the supervisor's context. Long enough to hold
 # the figures a chunk states (leaf chunks are up to 800 chars), since the
 # supervisor judges from it whether a sub-question is answered; at 160 the
@@ -284,7 +282,7 @@ def decide_route(state: AgentState, llm: BaseChatModel) -> SupervisorRoute:
     `caching/response_cache.py`) skips straight to Reporting since Research
     and Analytics already ran for this exact objective. Within those
     constraints, the LLM picks whether to proceed or hand back for another round —
-    capped by `_MAX_ROUTING_VISITS` so a bad decision can't loop forever,
+    capped by `RunPolicy.max_routing_visits` so a bad decision can't loop forever,
     and clamped to the currently allowed options so a malformed answer
     can't route somewhere invalid. Analytics is offered again only when the
     findings changed since it last ran. A hand-back to Research carries the gap
@@ -317,7 +315,7 @@ def decide_route(state: AgentState, llm: BaseChatModel) -> SupervisorRoute:
     if state.get("report_path"):
         return _rule("FINISH", "the report is written")
 
-    if state.get("supervisor_visits", 0) >= _MAX_ROUTING_VISITS:
+    if state.get("supervisor_visits", 0) >= settings.run_policy.max_routing_visits:
         if not state.get("analytics_results"):
             return _rule("analytics", "visit cap reached: moving on to analysis")
         return _rule("reporting", "visit cap reached: moving on to the report")
@@ -365,9 +363,11 @@ def _record_run_end(state: AgentState) -> None:
     """Policy guardrail: one audit line per finished run, from whichever
     surface drove it (CLI, `langgraph dev`, frontend)."""
 
+    thread_id = audit.current_thread_id()
+    usage = take_run_usage(thread_id)
     audit.record(
         "run_finished",
-        audit.current_thread_id(),
+        thread_id,
         objective=state["objective"],
         route_trace=[
             getattr(message, "name", None) or "?"
@@ -381,6 +381,9 @@ def _record_run_end(state: AgentState) -> None:
         plan_coverage={item["id"]: item["status"] for item in state.get("plan") or []},
         error=state.get("error"),
         guardrail_events=state.get("guardrail_events", []),
+        model_calls=usage["model_calls"],
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
     )
 
 

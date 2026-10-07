@@ -48,7 +48,9 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
 - Agent version = `<pyproject version>+<fingerprint>` from `versioning.py`, which hashes
   prompts (`SYSTEM_PROMPT` in each agent), model + params, tool schemas, knowledge/index
   and safety limits. It is stamped on Langfuse traces, audit lines and eval results. A new
-  behavioural knob (prompt, limit, pattern list) must be added to the manifest there.
+  behavioural knob (prompt, limit, pattern list) must be added to the manifest there. Run
+  limits live in `RunPolicy` (`config.py`, read as `settings.run_policy`), not as module
+  constants.
 - Release gate: `evals/gate.toml` (thresholds, tolerances, judge model, prices) and
   `evals/baseline.json` (last approved metrics per provider) are committed. Only
   `run_evals.py --repeats 3 --update-baseline` writes the baseline; committing it is the

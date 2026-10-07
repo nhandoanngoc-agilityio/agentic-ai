@@ -21,6 +21,7 @@ no external moderation service, no measurable latency.
 | Prompt | Retrieved findings are fenced as data in both the analytics and reporting prompts, closing tags escaped | `security/fencing.py` | n/a (prevention) |
 | Harness | Timeout and SDK retries on every model call; timeout on the MCP write | `llm.py`, `agents/reporting/node.py` | A stalled call fails the step; the error is labelled transient and the run ends cleanly |
 | Tool | MCP server writes `.md` only, inside `REPORTS_DIR`, filename <= 128 chars, content <= 256 KB | `mcp_server/fs_server.py` | Tool call errors; nothing written |
+| Tool | An existing report with different content is never replaced unless the caller passes `overwrite=true`; each run writes `<objective slug>-<run id>.md`, so re-running an objective cannot replace an approved report | `mcp_server/fs_server.py`, `agents/reporting/node.py::report_filename` | Tool call errors; the existing report is kept |
 | Output | PII redaction (email, phone, card, SSN-shaped) | `security/output_filters.py::redact_pii` | Replaced with `[email redacted]` etc.; `output` event |
 | Output | Credential scrub (`sk-`, `sk-ant-`, `lsv2_`, `AKIA`, key=value shapes) | `security/output_filters.py::scrub_secrets` | Replaced with `[secret removed]`; `output` event |
 | Output | Number grounding: every figure >= 10 must match a number in the findings, or the output of an analytics call whose inputs came from the findings, within 1% | `security/output_filters.py::flag_unverified_numbers` | Figure gets ` [unverified]`; warning shown at the approval prompt |

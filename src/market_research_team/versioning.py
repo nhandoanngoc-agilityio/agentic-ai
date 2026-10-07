@@ -133,14 +133,11 @@ def _knowledge_static() -> dict[str, Any]:
         "leaf_chunk_overlap": settings.leaf_chunk_overlap,
         "retrieval_k_per_query": research._RETRIEVAL_K_PER_QUERY,
         "rerank_top_n": research._RERANK_TOP_N,
-        "max_research_findings": research._MAX_FINDINGS,
+        "max_research_findings": settings.run_policy.max_findings,
     }
 
 
 def _memory_safety() -> dict[str, Any]:
-    from market_research_team.agents.analytics import node as analytics
-    from market_research_team.agents.planner import node as planner
-    from market_research_team.agents.reporting import node as reporting
     from market_research_team.agents.supervisor import router
     from market_research_team.security import input_validation, output_filters, patterns
 
@@ -155,11 +152,12 @@ def _memory_safety() -> dict[str, Any]:
         "llm_timeout_seconds": settings.llm_timeout_seconds,
         "llm_max_retries": settings.llm_max_retries,
         "mcp_write_timeout_seconds": settings.mcp_write_timeout_seconds,
-        "max_routing_visits": router._MAX_ROUTING_VISITS,
-        "max_plan_items": planner._MAX_PLAN_ITEMS,
+        "max_routing_visits": settings.run_policy.max_routing_visits,
+        "max_plan_items": settings.run_policy.max_plan_items,
         "supervisor_finding_snippet_chars": router._FINDING_SNIPPET_CHARS,
-        "max_tool_iterations": analytics._MAX_TOOL_ITERATIONS,
-        "max_review_rounds": reporting._MAX_REVIEW_ROUNDS,
+        "max_tool_iterations": settings.run_policy.max_tool_iterations,
+        "max_review_rounds": settings.run_policy.max_review_rounds,
+        "max_self_check_redrafts": settings.run_policy.max_self_check_redrafts,
         "max_objective_length": input_validation._MAX_OBJECTIVE_LENGTH,
         "unverified_mark": output_filters.UNVERIFIED_MARK,
         "patterns": {

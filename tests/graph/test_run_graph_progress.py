@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.reporting import node as reporting_node_module
+from market_research_team.agents.reporting.node import report_filename
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.agents.supervisor import router as supervisor_router_module
 from market_research_team.agents.supervisor.router import SupervisorRoute
@@ -121,7 +122,8 @@ def test_streamed_resume_finishes_with_the_same_state_as_invoke() -> None:
 
     plain, streamed = _run_both(Command(resume={"approved": True}), steps, "t-finish")
 
-    assert streamed["report_path"] == "reports/assess-acme-pricing-strategy.md"
+    expected = report_filename("Assess Acme pricing strategy", "t-finish")
+    assert streamed["report_path"] == f"reports/{expected}"
     assert "__interrupt__" not in streamed
     assert _comparable(streamed) == _comparable(plain)
     assert steps[-2:] == ["report_review", "supervisor"]

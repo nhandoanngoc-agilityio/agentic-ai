@@ -14,7 +14,7 @@ from langgraph.types import Command
 from market_research_team import graph as graph_module
 from market_research_team.state import AgentState, new_run_state
 
-# A reviewer can reject up to `_MAX_REVIEW_ROUNDS` (3) drafts; never loop forever.
+# A reviewer can reject up to `RunPolicy.max_review_rounds` (3) drafts; never loop forever.
 MAX_APPROVAL_ROUNDS = 3
 
 

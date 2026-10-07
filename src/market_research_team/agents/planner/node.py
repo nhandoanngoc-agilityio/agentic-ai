@@ -11,13 +11,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
 from market_research_team.security import audit
 from market_research_team.state import AgentState, PlanItem
-
-# Enough to cover a two-company comparison facet by facet; each item can cost
-# a research pass and a supervisor call, so more items mean a slower run.
-_MAX_PLAN_ITEMS = 4
 
 SYSTEM_PROMPT = (
     "You plan research for a market and competitor research team. Its "
@@ -83,7 +80,7 @@ def make_plan(objective: str, llm: BaseChatModel) -> list[PlanItem]:
                 seen.add(question.lower())
                 deduped.append(question)
         if deduped:
-            return _items(deduped[:_MAX_PLAN_ITEMS])
+            return _items(deduped[: settings.run_policy.max_plan_items])
         reason = "empty_result"
 
     audit.record(

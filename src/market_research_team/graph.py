@@ -25,7 +25,11 @@ from market_research_team.caching.response_cache import get_cached_response
 from market_research_team.config import settings
 from market_research_team.guardrails import with_error_boundary
 from market_research_team.observability import flush as flush_traces
-from market_research_team.observability import get_langfuse_handler, tracing_enabled
+from market_research_team.observability import (
+    get_langfuse_handler,
+    take_run_usage,
+    tracing_enabled,
+)
 from market_research_team.security import audit
 from market_research_team.security.input_guard import input_guard_node
 from market_research_team.security.input_validation import validate_objective
@@ -196,10 +200,12 @@ def run_graph(
         else:
             result = _execute(target_graph, initial_state, config, on_step)
     except GraphRecursionError as exc:
+        take_run_usage(thread_id)  # the run ended without a run_finished record
         _record_run_latency(thread_id, objective, start, "recursion_limit")
         state = _state_at_failure(target_graph, initial_state, config)
         return cast(AgentState, {**state, "error": f"Recursion limit reached: {exc}"})
     except Exception:
+        take_run_usage(thread_id)
         _record_run_latency(thread_id, objective, start, "exception")
         raise
     finally:

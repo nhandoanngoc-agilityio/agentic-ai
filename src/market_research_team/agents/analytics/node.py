@@ -8,13 +8,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import BaseTool
 
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
+from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
 from market_research_team.security import audit
 from market_research_team.security.fencing import FINDINGS_TAG, fence
 from market_research_team.security.output_filters import ungrounded_inputs
 from market_research_team.state import AgentState, AnalyticsResult, GuardrailEvent, ResearchFinding
-
-_MAX_TOOL_ITERATIONS = 4
 
 
 def _record_tool_call(tool_name: str, duration_ms: float, outcome: str) -> None:
@@ -95,7 +94,7 @@ def run_tool_calling_loop(
     objective: str,
     findings: list[ResearchFinding],
     *,
-    max_iterations: int = _MAX_TOOL_ITERATIONS,
+    max_iterations: int | None = None,
 ) -> list[AnalyticsResult]:
     """Drive an LLM tool-calling loop and record every tool call as a result.
 
@@ -123,6 +122,8 @@ def run_tool_calling_loop(
     ]
 
     results: list[AnalyticsResult] = []
+    if max_iterations is None:
+        max_iterations = settings.run_policy.max_tool_iterations
     for _ in range(max_iterations):
         ai_message = llm_with_tools.invoke(messages, config={"tags": ["analytics"]})
         messages.append(ai_message)

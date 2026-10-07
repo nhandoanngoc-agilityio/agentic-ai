@@ -55,7 +55,11 @@ a final report to disk via a custom local MCP server.
   runs the output guardrails; `report_review` pauses on a human-approval
   interrupt, then calls a custom local MCP server (spawned over stdio) to write
   that exact draft to disk. A rejection loops back to `reporting` for a redraft.
-  Plan items left unanswered are listed under "Open questions" in the draft.
+  Plan items left unanswered are listed under "Open questions" in the draft. If the
+  output check finds figures it can't trace to the evidence, the agent redrafts once
+  before the reviewer sees the draft (a `self_check_redraft` event). Each run writes
+  `<objective slug>-<run id>.md`, and the MCP server never replaces a different
+  existing report, so re-running an objective keeps earlier approved reports.
 
 Every node is wrapped with an error boundary (`guardrails.py`): an
 unexpected failure is recorded into state, labelled with its exception type and
@@ -176,7 +180,7 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 
 Verified against this repo's current state, not aspirational:
 
-- **Test suite (2026-10-06)**: 611 `pytest` tests: 608 pass, and the 3 live-Postgres tests skip
+- **Test suite (2026-10-06)**: 639 `pytest` tests: 636 pass, and the 3 live-Postgres tests skip
   unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
   `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
   Hermetic: no API key or seeded vector store required. GitLab CI runs all of these through
@@ -558,6 +562,7 @@ and can be overridden via `.env` or real environment variables. From
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` | unset | Pinned sampling parameters (provider default when unset); part of the agent version |
 | `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `60` / `2` | Per-call deadline and SDK retries (rate limits, 5xx, connection errors); part of the agent version |
 | `MCP_WRITE_TIMEOUT_SECONDS` | `30` | Deadline for one MCP report write, including spawning the server |
+| `RUN_POLICY__MAX_ROUTING_VISITS`, `__MAX_PLAN_ITEMS`, `__MAX_TOOL_ITERATIONS`, `__MAX_FINDINGS`, `__MAX_REVIEW_ROUNDS`, `__MAX_SELF_CHECK_REDRAFTS` | `8`, `4`, `4`, `10`, `3`, `1` | Run limits, all in `RunPolicy` (`config.py`); part of the agent version |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | unset | Optional Langfuse tracing; a no-op unless both keys are set |
 
 Other tunables (`anthropic_model` / `openai_model` names, defaults `claude-sonnet-5-5` /

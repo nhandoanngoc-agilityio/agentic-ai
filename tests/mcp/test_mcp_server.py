@@ -38,12 +38,35 @@ async def test_write_report_creates_file_with_content() -> None:
     assert result.content[0].text == str(written_path)
 
 
-async def test_write_report_overwrites_existing_file() -> None:
+async def test_write_report_refuses_to_replace_a_different_report() -> None:
     async with create_connected_server_and_client_session(mcp_server) as session:
         await session.call_tool("write_report", {"filename": "x.md", "content": "first"})
-        await session.call_tool("write_report", {"filename": "x.md", "content": "second"})
+        result = await session.call_tool("write_report", {"filename": "x.md", "content": "second"})
 
+    assert result.isError is True
+    assert "already exists" in result.content[0].text  # type: ignore[union-attr]
+    assert (settings.reports_dir / "x.md").read_text(encoding="utf-8") == "first"
+
+
+async def test_write_report_replaces_only_with_explicit_overwrite() -> None:
+    async with create_connected_server_and_client_session(mcp_server) as session:
+        await session.call_tool("write_report", {"filename": "x.md", "content": "first"})
+        result = await session.call_tool(
+            "write_report", {"filename": "x.md", "content": "second", "overwrite": True}
+        )
+
+    assert result.isError is False
     assert (settings.reports_dir / "x.md").read_text(encoding="utf-8") == "second"
+
+
+async def test_write_report_accepts_rewriting_identical_content() -> None:
+    """A review step replayed after a crash writes the same draft again."""
+
+    async with create_connected_server_and_client_session(mcp_server) as session:
+        await session.call_tool("write_report", {"filename": "x.md", "content": "same"})
+        result = await session.call_tool("write_report", {"filename": "x.md", "content": "same"})
+
+    assert result.isError is False
 
 
 async def test_write_report_rejects_non_markdown_filename() -> None:

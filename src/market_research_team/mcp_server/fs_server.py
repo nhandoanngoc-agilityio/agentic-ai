@@ -48,20 +48,23 @@ def _resolve_report_path(filename: str) -> Path:
 
 
 @mcp_server.tool()
-def write_report(filename: str, content: str) -> str:
+def write_report(filename: str, content: str, overwrite: bool = False) -> str:
     """Write markdown content to a file in the reports directory.
 
     `filename` must be a plain filename ending in `.md`, at most 128
     characters, with no directory components; anything else raises an error
     and nothing is written. `content` is limited to 256,000 bytes (UTF-8).
-    Creates the file if it doesn't exist, or overwrites it if it does.
-    Returns the absolute path that was written.
+    An existing report with different content is never replaced unless
+    `overwrite` is true (an approved report must not disappear silently);
+    writing identical content again succeeds. Returns the absolute path.
     """
 
     path = _resolve_report_path(filename)
     size = len(content.encode("utf-8"))
     if size > _MAX_REPORT_BYTES:
         raise ValueError(f"Report content is {size} bytes; the limit is {_MAX_REPORT_BYTES}.")
+    if path.exists() and not overwrite and path.read_text(encoding="utf-8") != content:
+        raise ValueError(f"'{filename}' already exists with different content; nothing written.")
     path.write_text(content, encoding="utf-8")
     return str(path)
 

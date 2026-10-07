@@ -3,6 +3,7 @@ from langchain_core.messages import AIMessage
 
 from market_research_team.agents.supervisor import router as router_module
 from market_research_team.agents.supervisor.router import decide_next_step
+from market_research_team.config import settings
 from market_research_team.state import AgentState
 
 _FINDING = {"source": "x", "content": "y", "relevance_score": 1.0}
@@ -173,7 +174,7 @@ def test_falls_back_to_safe_default_on_llm_error(monkeypatch) -> None:
 def test_forces_progress_once_the_visit_cap_is_reached() -> None:
     state = _state(
         research_findings=[_FINDING],
-        supervisor_visits=router_module._MAX_ROUTING_VISITS,
+        supervisor_visits=settings.run_policy.max_routing_visits,
     )
 
     result = decide_next_step(state, _ExplodingLLM())  # type: ignore[arg-type]
@@ -185,7 +186,7 @@ def test_forces_reporting_once_the_visit_cap_is_reached_and_analytics_is_done() 
     state = _state(
         research_findings=[_FINDING],
         analytics_results=[_RESULT],
-        supervisor_visits=router_module._MAX_ROUTING_VISITS,
+        supervisor_visits=settings.run_policy.max_routing_visits,
     )
 
     result = decide_next_step(state, _ExplodingLLM())  # type: ignore[arg-type]
@@ -258,7 +259,7 @@ def test_visit_cap_reads_the_counter_not_the_message_log() -> None:
     state = _state(research_findings=[_FINDING])
     state["messages"] = [
         AIMessage(content="Routing.", name="supervisor")
-        for _ in range(router_module._MAX_ROUTING_VISITS + 2)
+        for _ in range(settings.run_policy.max_routing_visits + 2)
     ]
 
     result = decide_next_step(state, _FakeLLM("research"))  # type: ignore[arg-type]
