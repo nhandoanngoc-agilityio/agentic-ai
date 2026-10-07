@@ -1,0 +1,30 @@
+# Hermetic checks only: no API keys, no network calls from tests, no seeded
+# vector store. The paid eval gate (scripts/run_evals.py) stays manual.
+stages:
+  - test
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cache/pip
+
+test:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install --upgrade pip
+    # CPU-only torch first, so sentence-transformers doesn't pull CUDA wheels.
+    - pip install torch --index-url https://download.pytorch.org/whl/cpu
+    - pip install -e ".[dev]"
+  script:
+    - ruff check src tests scripts gradio_app
+    - ruff format --check src tests scripts gradio_app
+    - basedpyright
+    - pytest -q --cov --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
