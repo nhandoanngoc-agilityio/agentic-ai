@@ -178,7 +178,10 @@ Verified against this repo's current state, not aspirational:
 - **Test suite (2026-10-06)**: 606 `pytest` tests: 603 pass, and the 3 live-Postgres tests skip
   unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
   `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
-  Hermetic: no API key or seeded vector store required. GitLab CI runs all of these.
+  Hermetic: no API key or seeded vector store required. GitLab CI runs all of these through
+  `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
+  repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
+  `--worktree` to include uncommitted changes.
 - **Release gate, approved baseline (2026-10-07)**: `run_evals.py --provider openai --langsmith
   --repeats 3 --update-baseline`, agent version `0.1.0+5b4a9c54be7d` (planner and
   coverage-driven supervisor; `gpt-4o-mini`, judge `gpt-5.4-mini`). Gate passed: task success
