@@ -187,7 +187,16 @@ Verified against this repo's current state, not aspirational:
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
-- **Release gate, approved baseline (2026-10-07, 08:30 UTC)**: `run_evals.py --provider openai
+- **Release gate, approved baseline (2026-10-07, 10:05 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` on `harness-polish` (agent `0.1.0+ac2f6794297e`:
+  report self-check, no report overwrite, RunPolicy). Gate passed: task success 0.976, safety
+  1.0, tool accuracy 1.0, judged quality 0.804. 11.4 model calls per graph run (supervisor
+  3.6, query rewriter 3.2, analytics 2.3, report draft 1.3, planner 1.0), cost about $0.0027
+  per run, median run 28.8 s, p95 58.5 s (cap 120 s). The self-check redraft fired in 3 of 9
+  graph runs; a redraft roughly doubles the report step, which accounts for the two slowest
+  runs (52 s, 58.5 s; the rest 24–34 s). The one failure is the known-unstable
+  `supervisor_decision/plan_covered_analysis_done` (1 of 3 repeats).
+- **Previous baseline (2026-10-07, 08:30 UTC)**: `run_evals.py --provider openai
   --langsmith --repeats 3 --update-baseline` after the targeted-research fix and the
   work-based gate, with model usage counted for every call. Gate passed: task success 1.0,
   safety 1.0, tool accuracy 1.0, judged quality 0.822. 11.7 model calls per graph run
