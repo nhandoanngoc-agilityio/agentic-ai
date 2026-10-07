@@ -179,14 +179,22 @@ Verified against this repo's current state, not aspirational:
   unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
   `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
   Hermetic: no API key or seeded vector store required. GitLab CI runs all of these.
-- **Release gate after the planner change**: not yet re-run. The baseline below predates the
-  planner, the coverage-tracking supervisor, the grounding changes and the new eval cases, so
-  the next `run_evals.py --repeats 3` run reports every changed component and needs
-  `--update-baseline` once it passes.
+- **Release gate, approved baseline (2026-10-07)**: `run_evals.py --provider openai --langsmith
+  --repeats 3 --update-baseline`, agent version `0.1.0+5b4a9c54be7d` (planner and
+  coverage-driven supervisor; `gpt-4o-mini`, judge `gpt-5.4-mini`). Gate passed: task success
+  0.952, safety 1.0, tool accuracy 1.0, judged quality 0.848 (analytics 1.00, supervisor 0.94,
+  full pipeline 0.87, reporting 0.79, query rewrite 0.73), p95 latency 26.4 s, about $0.00045
+  per run. Planning, trajectory and both regression cases pass in all 3 repeats. The one
+  unstable case is `supervisor_decision/plan_covered_analysis_done` (1 of 3 here, 3 of 3 in the
+  run before): gpt-4o-mini sometimes keeps a contract-value range open "to confirm" it.
+  Getting there took two failed gate runs, each diagnosed from the run's audit log: a research
+  loop, then an analytics loop (see `docs/architecture.md`, 2026-10-06). The LangSmith
+  per-category `pass_rate` it prints counts a row as passed only if the judge scored exactly
+  1.0, so judged categories can read 0.00; the gate uses the judge mean instead.
 - **Postgres checkpointer (2026-10-05)**: with `DATABASE_URL` pointing at a local Postgres, all
   11 `tests/checkpointing` tests pass, including the 3 live ones: the real graph saves its
   checkpoints to Postgres, resumes through the approval interrupt, and keeps threads separate.
-- **Release gate, approved baseline (2026-10-06)**: `run_evals.py --provider openai --langsmith
+- **Previous baseline (2026-10-06, before the planner)**: `run_evals.py --provider openai --langsmith
   --repeats 3`, agent version `0.1.0+b6428b4bd1cc` (`gpt-4o-mini`, judge `gpt-5.4-mini`). Gate
   passed: task success 1.0, safety 1.0, tool accuracy 1.0, judged quality 0.892 averaged over
   21 judged rows (analytics 1.00, supervisor 0.96, full pipeline 0.90, reporting 0.86, query
