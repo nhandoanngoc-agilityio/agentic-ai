@@ -270,3 +270,15 @@ def test_with_one_step_left_open_items_are_still_judged() -> None:
 
     assert (route.next, route.decided_by) == ("analytics", "llm")
     assert route.plan is not None and route.plan[1]["status"] == "answered"
+
+
+def test_a_redirected_hand_back_says_so_in_the_rationale() -> None:
+    llm = _DecisionLLM(next="research", focus_id="q1", rationale="q1 needs more detail.")
+
+    route = decide_route(_state(_searched(_plan("open", "open"), "q1")), llm)  # type: ignore[arg-type]
+
+    assert route.focus_id == "q2"
+    assert route.rationale == (
+        "q1 needs more detail. [code: q1 can't be researched again (already searched or"
+        " resolved), so researching q2]"
+    )

@@ -38,6 +38,12 @@ _PLAN: list[PlanItem] = [
 ]
 
 
+def _unheld(findings: list[ResearchFinding], exclude: frozenset) -> list[ResearchFinding]:
+    """Like the real pipeline: findings already held are not returned again."""
+
+    return [f for f in findings if (f["source"], f["content"]) not in exclude]
+
+
 def _cover(item_id: str, status: str, *sources: str) -> SimpleNamespace:
     return SimpleNamespace(id=item_id, status=status, sources=list(sources))
 
@@ -77,11 +83,11 @@ def audit_events(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def _stub_everything_but_the_supervisor_logic(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     research_calls: list[Any] = []
 
-    def _research(objective: str, focus: str | None = None):
+    def _research(objective: str, focus: str | None = None, exclude=frozenset()):
         research_calls.append(focus)
         # The broad pass finds Acme only; a pass aimed at Globex finds Globex.
         found = [_GLOBEX] if focus and "Globex" in focus else [_ACME]
-        return found, 2, 4, []
+        return _unheld(found, exclude), 2, 4, []
 
     async def _write(filename: str, content: str) -> str:
         return f"reports/{filename}"
@@ -183,7 +189,7 @@ def test_an_unanswerable_item_stops_research_and_is_named_in_the_report(
     monkeypatch.setattr(
         research_node_module,
         "run_research_pipeline",
-        lambda objective, focus=None: ([_ACME], 2, 4, []),
+        lambda objective, focus=None, exclude=frozenset(): (_unheld([_ACME], exclude), 2, 4, []),
     )
 
     final, draft = _run(

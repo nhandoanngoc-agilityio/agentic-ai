@@ -50,7 +50,7 @@ def _stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         research_node_module,
         "run_research_pipeline",
-        lambda objective, focus=None: (
+        lambda objective, focus=None, exclude=frozenset(): (
             [{"source": "acme.md", "content": "Acme is $49.", "relevance_score": 1.0}],
             1,
             1,

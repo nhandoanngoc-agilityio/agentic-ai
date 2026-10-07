@@ -41,8 +41,9 @@ a final report to disk via a custom local MCP server.
   when the findings changed since it ran. A visit cap is the last safety net. Every route carries a rationale and says who decided it.
 - **Research Agent Node** — advanced RAG: query rewriting/expansion, vector
   retrieval, cross-encoder reranking. On a hand-back it searches for the named
-  plan item and merges new findings into the existing ones (deduplicated, capped
-  at 10). A targeted pass that adds nothing marks that item unanswerable; if
+  plan item, skipping chunks it already holds and ranking against the gap, and
+  merges the new findings in (deduplicated, capped at 10, new ones kept). A
+  targeted pass that finds nothing new marks that item unanswerable; if
   nothing clears the rerank floor on the first pass, the run ends with an error
   instead of retrying.
 - **Analytics Agent Node** — tool-calling agent using native Python
@@ -175,7 +176,7 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 
 Verified against this repo's current state, not aspirational:
 
-- **Test suite (2026-10-06)**: 606 `pytest` tests: 603 pass, and the 3 live-Postgres tests skip
+- **Test suite (2026-10-06)**: 611 `pytest` tests: 608 pass, and the 3 live-Postgres tests skip
   unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
   `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
   Hermetic: no API key or seeded vector store required. GitLab CI runs all of these through

@@ -291,3 +291,28 @@ Reporting. Analytics is the slowest node (5–9 s), so the repeats were most of 
   fallback, and the planning check flags only questions phrased as comparisons, not a
   market question that names both companies as context.
 
+## 2026-10-07 — Targeted searches return new chunks; CI reproducible locally
+
+A live CLI run ("Compare Acme and Globex pricing and recommend a competitive positioning")
+reported market size as unanswerable although `market_overview.md` covers it. The targeted
+search retrieved 12 candidates, but ranked them against objective + gap: the pricing objective
+put the already-held pricing chunks in all 5 top slots, the pass counted "0 new", and the item
+was marked unanswerable.
+
+- A targeted search now drops chunks already held before reranking (`exclude`), and ranks
+  against the gap alone.
+- "Unanswerable" means the targeted search found no relevant new chunk above the rerank floor,
+  not that its chunks failed to survive the 10-finding cap.
+- A targeted pass's findings are kept when merging (`keep_new`); the lowest-scoring held ones
+  make room. Scores from different passes are ranked against different queries, so comparing
+  them could drop exactly the chunk the pass was sent for.
+- When code redirects a hand-back away from an item the model chose (already searched), the
+  rationale says so instead of carrying the model's reasoning about the other item.
+
+CI: the first push failed because `pyproject.toml` points basedpyright at `./.venv` (absent in
+the job) and the job installed only `.[dev]`, so the Postgres imports were unresolved. CI now
+creates `.venv`, installs `.[dev,prod]` and runs `scripts/ci_checks.sh`;
+`scripts/ci_local.sh` runs the same script on a clean copy with an empty environment. That run
+also exposed two tests passing only because the developer's shell exported `OPENAI_API_KEY`;
+`tests/conftest.py` now gives every test dummy keys.
+

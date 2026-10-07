@@ -37,7 +37,7 @@ def _stub_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         research_node_module,
         "run_research_pipeline",
-        lambda objective, focus=None: ([finding], 2, 4, []),
+        lambda objective, focus=None, exclude=frozenset(): ([finding], 2, 4, []),
     )
     monkeypatch.setattr(
         analytics_node_module,

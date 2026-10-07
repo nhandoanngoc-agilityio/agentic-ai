@@ -247,10 +247,14 @@ def _ask_llm_for_route(
             decided_by="rule",
             plan=new_plan,
         )
-    target = next(
-        (item for item in remaining if item["id"] == getattr(decision, "focus_id", None)),
-        remaining[0],
-    )
+    requested = getattr(decision, "focus_id", None)
+    target = next((item for item in remaining if item["id"] == requested), remaining[0])
+    if requested and requested != target["id"]:
+        # The model's reasoning is about `requested`; say what code did instead.
+        rationale += (
+            f" [code: {requested} can't be researched again (already searched or"
+            f" resolved), so researching {target['id']}]"
+        )
     return SupervisorRoute(
         "research",
         target["question"],
