@@ -118,12 +118,24 @@ def flush() -> None:
         _client().flush()
 
 
+def component_from_tags(tags: list[str] | None) -> str:
+    """The call site's component tag (e.g. "supervisor_router").
+
+    Inside a graph run LangGraph puts its own tags first ("seq:step:1"), so
+    `tags[0]` attributed every call to that. Framework tags are always
+    `namespace:value`; component names never contain a colon.
+    """
+
+    return next((tag for tag in tags or [] if ":" not in tag), "untagged")
+
+
 class TokenUsageCallbackHandler(BaseCallbackHandler):
     """Records per-call token usage to the local audit log.
 
     Bound once per model in `llm.py::get_chat_model()`, so every call site
     gets it automatically. The calling component is read from the run's
-    `tags` (each call site passes `config={"tags": [component_name]}`) --
+    `tags` (each call site passes `config={"tags": [component_name]}`; see
+    `component_from_tags`) --
     without a tag, usage is still recorded under `component="untagged"`
     rather than silently dropped.
     """
@@ -138,7 +150,7 @@ class TokenUsageCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         try:
-            component = tags[0] if tags else "untagged"
+            component = component_from_tags(tags)
             for generation_list in response.generations:
                 for generation in generation_list:
                     message = getattr(generation, "message", None)

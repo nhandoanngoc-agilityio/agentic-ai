@@ -51,6 +51,8 @@ GOOD = EvalMetrics(
     cost_per_run_usd=0.10,
     case_pass_rate={"reporting/r": 1.0, "analytics/a": 1.0},
     repeats=3,
+    latency_median_ms=50000.0,
+    model_calls_per_run=10.0,
 )
 
 
@@ -124,7 +126,7 @@ def test_each_absolute_failure(config, change, name):
 
 
 def test_baseline_drop_within_tolerance_passes(config):
-    candidate = replace(GOOD, quality=0.81, latency_p95_ms=74000.0, cost_per_run_usd=0.119)
+    candidate = replace(GOOD, quality=0.81, latency_median_ms=62000.0, cost_per_run_usd=0.119)
 
     report = evaluate_gate("anthropic", candidate, _baseline(), config, judge_id="h")
 
@@ -137,7 +139,7 @@ def test_baseline_drop_within_tolerance_passes(config):
         ({"task_success": 0.94}, "task_success"),
         ({"quality": 0.79}, "quality"),
         ({"tool_accuracy": 0.949}, "tool_accuracy"),
-        ({"latency_p95_ms": 76000.0}, "latency_p95_ms"),
+        ({"model_calls_per_run": 12.6}, "model_calls_per_run"),
         ({"cost_per_run_usd": 0.121}, "cost_per_run_usd"),
     ],
 )
@@ -238,3 +240,98 @@ def test_committed_gate_prices_every_default_agent_model() -> None:
     defaults = Settings.model_fields
     for model in (defaults["anthropic_model"].default, defaults["openai_model"].default):
         assert require_price(config.prices, model).input_per_mtok > 0
+
+
+def test_one_slow_run_does_not_fail_the_baseline_latency_check(config):
+    """p95 of ~9 runs is the slowest run: a slow provider response can move it
+    +46% with no change in the agent. The median doesn't move, so it passes;
+    the absolute p95 cap still bounds the slow run."""
+
+    candidate = replace(GOOD, latency_p95_ms=95000.0)  # +58% p95, same median
+
+    report = evaluate_gate("anthropic", candidate, _baseline(), config, judge_id="h")
+
+    assert report.passed, _failed(report)
+    assert not any(c.name == "latency_p95_ms" and c.kind == "baseline" for c in report.checks)
+    capped = evaluate_gate(
+        "anthropic", replace(GOOD, latency_p95_ms=130000.0), _baseline(), config, judge_id="h"
+    )
+    assert ("absolute", "latency_p95_ms") in _failed(capped)
+
+
+def test_a_slow_provider_hour_warns_but_does_not_fail(config):
+    """The failing run of 2026-10-07: every call slower, the agent doing less
+    work. Time drift is reported; work decides."""
+
+    candidate = replace(GOOD, latency_median_ms=71000.0, model_calls_per_run=9.0)  # +42%, -10%
+
+    report = evaluate_gate("anthropic", candidate, _baseline(), config, judge_id="h")
+
+    assert report.passed, _failed(report)
+    (warning,) = [w for w in report.warnings if "median run latency" in w]
+    assert warning.startswith(
+        "median run latency +42% vs baseline median; model calls per run -10%"
+    )
+
+
+def test_a_loop_fails_on_model_calls_even_at_unchanged_latency(config):
+    candidate = replace(GOOD, model_calls_per_run=14.0)  # +40% work, same time
+
+    report = evaluate_gate("anthropic", candidate, _baseline(), config, judge_id="h")
+
+    assert ("baseline", "model_calls_per_run") in _failed(report)
+
+
+def test_a_baseline_without_new_metrics_warns_instead_of_comparing(config):
+    legacy = _baseline(replace(GOOD, latency_median_ms=None, model_calls_per_run=None))
+
+    report = evaluate_gate(
+        "anthropic", replace(GOOD, latency_median_ms=80000.0), legacy, config, judge_id="h"
+    )
+
+    assert report.passed, _failed(report)
+    assert not any(c.name == "model_calls_per_run" for c in report.checks)
+    assert any("no model-call count" in w for w in report.warnings)
+    assert any("vs baseline p95 (no median recorded)" in w for w in report.warnings)
+
+
+def test_a_baseline_saved_before_medians_existed_still_loads(tmp_path: Path):
+    import json
+    from dataclasses import asdict
+
+    from market_research_team.evaluation.gate import load_baseline
+
+    entry = asdict(_baseline())
+    del entry["metrics"]["latency_median_ms"]
+    del entry["metrics"]["model_calls_per_run"]
+    del entry["metrics"]["model_calls_by_component"]
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps({"openai": entry}), encoding="utf-8")
+
+    metrics = load_baseline(path)["openai"].metrics
+    assert metrics.latency_median_ms is None and metrics.model_calls_per_run is None
+
+
+def test_cost_and_calls_are_not_compared_across_usage_accounting(config):
+    """A baseline that recorded only plain `.invoke` calls under-counts cost and
+    calls; comparing a full count against it would always look like +100%."""
+
+    old_accounting = _baseline(replace(GOOD, usage_accounting=1))
+    candidate = replace(GOOD, usage_accounting=2, cost_per_run_usd=0.40, model_calls_per_run=30.0)
+
+    report = evaluate_gate("anthropic", candidate, old_accounting, config, judge_id="h")
+
+    assert report.passed, _failed(report)
+    assert not any(
+        c.name in ("cost_per_run_usd", "model_calls_per_run") and c.kind == "baseline"
+        for c in report.checks
+    )
+    assert any("recorded model usage differently" in w for w in report.warnings)
+    over_cap = evaluate_gate(
+        "anthropic",
+        replace(candidate, cost_per_run_usd=0.6),
+        old_accounting,
+        config,
+        judge_id="h",
+    )
+    assert ("absolute", "cost_per_run_usd") in _failed(over_cap)

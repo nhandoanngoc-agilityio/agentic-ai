@@ -41,6 +41,7 @@ class Tolerance:
     tool_accuracy_max_drop: float
     latency_max_increase: float
     cost_max_increase: float
+    model_calls_max_increase: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -147,18 +148,54 @@ def _max_increase(
     return GateCheck(name, "baseline", value, f"<= +{increase:.0%} (baseline {base:.4g})", passed)
 
 
+def _latency_warning(m: EvalMetrics, b: EvalMetrics, increase: float) -> str | None:
+    """Wall-clock drift vs the baseline, reported but not blocking.
+
+    Run time moves with provider response time as much as with the agent: a
+    slow hour shifted every run (median +42%) while the agent did less work.
+    Work is gated by `model_calls_per_run` and cost; time by the absolute
+    `latency_p95_ms_max` cap. This says when the two disagree.
+    """
+
+    base = b.latency_median_ms if b.latency_median_ms is not None else b.latency_p95_ms
+    if m.latency_median_ms is None or not base or m.latency_median_ms <= base * (1 + increase):
+        return None
+    which = "median" if b.latency_median_ms is not None else "p95 (no median recorded)"
+    drift = m.latency_median_ms / base - 1
+    calls = ""
+    if usage_comparable(m, b) and m.model_calls_per_run is not None and b.model_calls_per_run:
+        call_drift = m.model_calls_per_run / b.model_calls_per_run - 1
+        calls = f"; model calls per run {call_drift:+.0%}"
+    return (
+        f"median run latency {drift:+.0%} vs baseline {which}{calls}. Not blocking: "
+        "unchanged work points to provider response time."
+    )
+
+
+def usage_comparable(m: EvalMetrics, b: EvalMetrics) -> bool:
+    """Cost and model calls compare only when both were recorded the same way."""
+
+    return m.usage_accounting == b.usage_accounting
+
+
 def _baseline_checks(m: EvalMetrics, b: EvalMetrics, tol: Tolerance) -> list[GateCheck]:
     candidates = [
         _max_drop("task_success", m.task_success, b.task_success, tol.task_success_max_drop),
         _max_drop("quality", m.quality, b.quality, tol.quality_max_drop),
         _max_drop("tool_accuracy", m.tool_accuracy, b.tool_accuracy, tol.tool_accuracy_max_drop),
-        _max_increase(
-            "latency_p95_ms", m.latency_p95_ms, b.latency_p95_ms, tol.latency_max_increase
-        ),
-        _max_increase(
-            "cost_per_run_usd", m.cost_per_run_usd, b.cost_per_run_usd, tol.cost_max_increase
-        ),
     ]
+    if usage_comparable(m, b):
+        candidates += [
+            _max_increase(
+                "model_calls_per_run",
+                m.model_calls_per_run,
+                b.model_calls_per_run,
+                tol.model_calls_max_increase,
+            ),
+            _max_increase(
+                "cost_per_run_usd", m.cost_per_run_usd, b.cost_per_run_usd, tol.cost_max_increase
+            ),
+        ]
     return [check for check in candidates if check is not None]
 
 
@@ -191,6 +228,23 @@ def evaluate_gate(
         warnings.append(f"No baseline for provider {provider!r}: absolute checks only.")
     else:
         checks += _baseline_checks(candidate, baseline.metrics, config.tolerance)
+        latency = _latency_warning(
+            candidate, baseline.metrics, config.tolerance.latency_max_increase
+        )
+        if latency:
+            warnings.append(latency)
+        if not usage_comparable(candidate, baseline.metrics):
+            warnings.append(
+                f"baseline recorded model usage differently (accounting "
+                f"v{baseline.metrics.usage_accounting}, this run "
+                f"v{candidate.usage_accounting}): cost and model calls are not compared "
+                "until the baseline is refreshed; the absolute cost cap still applies."
+            )
+        elif baseline.metrics.model_calls_per_run is None:
+            warnings.append(
+                "baseline has no model-call count (recorded before it existed): agent work "
+                "is not compared until the baseline is refreshed."
+            )
         checks += _case_regressions(candidate, baseline.metrics)
         if baseline.judge_id != judge_id:
             warnings.append(

@@ -143,3 +143,18 @@ def test_record_feedback_score_is_silent_when_disabled_or_failing(monkeypatch: p
     monkeypatch.setattr(observability, "tracing_enabled", lambda: True)
     monkeypatch.setattr(observability, "_client", _fake_client(_Boom()))
     observability.record_feedback_score("thread-1", "up")  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("tags", "component"),
+    [
+        (["seq:step:1", "supervisor_router"], "supervisor_router"),  # inside a graph run
+        (["planner"], "planner"),
+        (["seq:step:3", "langsmith:hidden"], "untagged"),
+        (None, "untagged"),
+    ],
+)
+def test_component_is_the_call_site_tag_not_a_framework_tag(tags, component) -> None:
+    from market_research_team.observability import component_from_tags
+
+    assert component_from_tags(tags) == component

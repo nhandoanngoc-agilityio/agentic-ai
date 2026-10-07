@@ -316,3 +316,44 @@ creates `.venv`, installs `.[dev,prod]` and runs `scripts/ci_checks.sh`;
 also exposed two tests passing only because the developer's shell exported `OPENAI_API_KEY`;
 `tests/conftest.py` now gives every test dummy keys.
 
+### Same day — release gate: latency compared by the median run
+
+A gate run after the research fix failed only `latency_p95_ms` vs baseline (38.5 s vs 26.4 s,
++46%). Routes were shorter than in the baseline run, but every model call was slower, the
+planner included (+36%, and the fix cannot touch it): provider response time. With 9 graph
+runs, "p95" is the slowest run, and the baseline was itself one fast sample.
+
+The baseline comparison now uses `latency_median_ms` (same tolerance, +25%); p95 stays as the
+absolute cap (`latency_p95_ms_max`). A baseline recorded before the median existed is compared
+by its p95 (looser) with a warning, until the next `--update-baseline` records a median.
+
+Known limit: the median absorbs one slow run, not a slow hour. In the failing run the median
+also moved (22.4 s to 31.7 s), so against a median baseline it would still have failed.
+
+
+### Same day — the gate compares agent work, and model usage is counted for every call
+
+The median comparison above still failed the slow-provider run against a median baseline, so
+the gate now compares **work** with the baseline and treats time as a cap:
+
+- New metrics: `model_calls_per_run` (mean model calls per graph run) and
+  `model_calls_by_component`. Gated against the baseline at +25%
+  (`model_calls_max_increase` in `gate.toml`), next to cost per run (+20%). Loops and longer
+  routes move both; a slow provider hour moves neither.
+- Wall-clock: p95 stays the absolute cap (120 s). The median run time vs the baseline became a
+  warning that shows the model-call change beside it.
+
+Building that exposed two older bugs in usage recording:
+
+- `get_chat_model()` attached the usage callback with `.with_config(...)`. `bind_tools` and
+  `with_structured_output` build new runnables from the model and drop config callbacks, so
+  only plain `.invoke` calls were recorded: inside a graph run, the report draft alone. Every
+  `cost_per_run_usd` and token summary before this counted only that call. The callback now
+  sits on the model object (`callbacks=` in the constructor), which every wrapper reuses.
+- The callback took `tags[0]` as the component, and inside a graph run LangGraph's own tag
+  (`seq:step:1`) comes first. It now takes the first tag without a colon.
+
+Because cost and call counts recorded before and after are not comparable, metrics carry
+`usage_accounting` (1 before, 2 after). The gate compares cost and model calls with a baseline
+only under the same accounting, and warns otherwise; the absolute cost cap still applies. The
+next `--update-baseline` records version 2.

@@ -187,8 +187,11 @@ Verified against this repo's current state, not aspirational:
   --repeats 3 --update-baseline`, agent version `0.1.0+5b4a9c54be7d` (planner and
   coverage-driven supervisor; `gpt-4o-mini`, judge `gpt-5.4-mini`). Gate passed: task success
   0.952, safety 1.0, tool accuracy 1.0, judged quality 0.848 (analytics 1.00, supervisor 0.94,
-  full pipeline 0.87, reporting 0.79, query rewrite 0.73), p95 latency 26.4 s, about $0.00045
-  per run. Planning, trajectory and both regression cases pass in all 3 repeats. The one
+  full pipeline 0.87, reporting 0.79, query rewrite 0.73), p95 latency 26.4 s. Its cost figure
+  (about $0.00045 per run) counted only the report draft: until 2026-10-07 usage was recorded
+  only for plain model calls, so the planner, supervisor, query rewriter and analytics calls
+  were missing (see `docs/architecture.md`); the real cost per run is higher. Planning,
+  trajectory and both regression cases pass in all 3 repeats. The one
   unstable case is `supervisor_decision/plan_covered_analysis_done` (1 of 3 here, 3 of 3 in the
   run before): gpt-4o-mini sometimes keeps a contract-value range open "to confirm" it.
   Getting there took two failed gate runs, each diagnosed from the run's audit log: a research
@@ -451,8 +454,14 @@ reporting, full_pipeline, safety, and regression (curated production failures, s
 ### Release gate
 
 Every run ends with a gate verdict per provider: task success, judged quality, tool accuracy,
-safety (must be 100%), p95 latency and cost per run, checked against absolute floors and
-against the last approved baseline for that provider.
+safety (must be 100%), model calls per run, p95 latency and cost per run, checked against
+absolute floors and against the last approved baseline for that provider.
+
+- Work, not wall-clock time, is compared with the baseline: model calls per graph run (+25%)
+  and cost per run (+20%) move when the agent loops or takes longer routes, and stay put when
+  the provider is slow. Run time is bounded by the absolute p95 cap; a median run time more
+  than 25% above the baseline is reported as a warning, with the model-call change beside it.
+  The gate output prints model calls per run by component for the candidate and the baseline.
 
 - `evals/gate.toml` holds the thresholds, tolerances, the pinned judge model and per-model
   prices. A model without a price stops the run before it spends anything.
