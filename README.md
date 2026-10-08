@@ -183,7 +183,8 @@ Verified against this repo's current state, not aspirational:
 - **Test suite (2026-10-06)**: 639 `pytest` tests: 636 pass, and the 3 live-Postgres tests skip
   unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
   `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
-  Hermetic: no API key or seeded vector store required. GitLab CI runs all of these through
+  Hermetic: no API key or seeded vector store required. GitHub Actions (`.github/workflows/ci.yml`)
+  runs all of these through
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
@@ -600,11 +601,10 @@ to touch to run the demo. Every node builds its LLM through
 
 Honest gaps, not hidden:
 
-- **GitLab CI is switched off.** The test job ran out of disk on the GitLab runner while
-  installing dependencies, so `.gitlab-ci.yml` was emptied on 2026-10-02 (`aa00df4`). Restore it
-  with `git show 6143b86:.gitlab-ci.yml > .gitlab-ci.yml` once the runner has space. Until then,
-  run `pytest` and `ruff` locally before pushing. Even with CI on, the real-LLM release gate
-  stays a manual step: it costs money and needs API keys.
+- **CI runs on GitHub Actions, not GitLab.** The company GitLab runner ran out of disk while
+  installing dependencies (torch and friends), so `.gitlab-ci.yml` was removed on 2026-10-08 and
+  the same job moved to `.github/workflows/ci.yml`. It runs only where the repository is pushed
+  to GitHub. The real-LLM release gate stays a manual step: it costs money and needs API keys.
 - **No Anthropic baseline.** `evals/baseline.json` has an approved baseline for OpenAI only, so
   an Anthropic eval run gets the absolute checks but no comparison against a baseline. Approving
   one needs a paid `run_evals.py --provider anthropic --repeats 3 --update-baseline` run.
@@ -613,9 +613,9 @@ Honest gaps, not hidden:
   against a local Postgres on 2026-10-05 (see Results). It hasn't run against a managed
   Postgres or with several app instances sharing one database; see
   [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md) Part 2 before doing that.
-- **Merge requests aren't gated.** Work goes through feature branches and GitLab merge requests,
-  and `main` is protected against force-push, but nothing requires an approval or a passing
-  pipeline before a merge.
+- **Merges aren't gated.** Work goes through feature branches, and `main` is protected against
+  force-push, but nothing requires an approval or a passing CI run before a merge. On GitHub,
+  a branch protection rule requiring the `CI / ruff, basedpyright, pytest` check would add that.
 - **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
   programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
   been clicked through interactively.

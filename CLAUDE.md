@@ -14,7 +14,7 @@ pytest                                       # hermetic, no API key needed
 ruff check src tests scripts gradio_app && ruff format --check src tests scripts gradio_app
 basedpyright                                 # type check; fails only on errors not in .basedpyright/baseline.json
 pytest --cov                                 # coverage report; fails under 93%
-scripts/ci_local.sh [--worktree]             # run the GitLab CI job locally on a clean copy before pushing
+scripts/ci_local.sh [--worktree]             # run the GitHub Actions CI job locally on a clean copy before pushing
 python scripts/seed_vectorstore.py           # rebuild Chroma index from data/raw/
 python scripts/run_graph_cli.py "<objective>" [--thread-id id]   # REAL LLM CALLS
 python scripts/run_gradio.py                 # launches the Gradio UI

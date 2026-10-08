@@ -375,3 +375,12 @@ next `--update-baseline` records version 2.
   `config.py` (overridable as `RUN_POLICY__...`). The manifest keeps the same keys, and the
   agent version was unchanged by the move (`0.1.0+ac2f6794297e` before and after).
 
+## 2026-10-08 — CI moved to GitHub Actions
+
+The company GitLab runner kept running out of disk while installing the job's dependencies, so
+GitLab CI never completed. The job moved to `.github/workflows/ci.yml` and `.gitlab-ci.yml` was
+removed. Same steps: Python 3.11, a venv at `./.venv` (where `[tool.pyright]` looks), CPU-only
+torch, `.[dev,prod]`, then `scripts/ci_checks.sh`, which `scripts/ci_local.sh` also runs, so a
+local pre-push run still matches CI. Runs on every push and pull request, cancels superseded
+runs, and uploads the JUnit report. `versioning.git_sha()` now also reads `GITHUB_SHA`.
+

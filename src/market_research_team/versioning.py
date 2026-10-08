@@ -54,7 +54,7 @@ def git_sha() -> str:
     `.git`), then the local checkout, else `unknown`. Build provenance only --
     not part of the fingerprint, which tracks behaviour, not commits."""
 
-    for var in ("GIT_SHA", "CI_COMMIT_SHA"):
+    for var in ("GIT_SHA", "GITHUB_SHA", "CI_COMMIT_SHA"):
         if value := os.environ.get(var):
             return value[:_HASH_LENGTH]
     try:
@@ -229,7 +229,7 @@ def trace_metadata() -> dict[str, str]:
 
 
 def clear_cache() -> None:
-    """Drop the cached git SHA -- for tests that set `GIT_SHA`/`CI_COMMIT_SHA`."""
+    """Drop the cached git SHA -- for tests that set `GIT_SHA`/`GITHUB_SHA`/`CI_COMMIT_SHA`."""
 
     git_sha.cache_clear()
 
