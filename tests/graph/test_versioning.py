@@ -22,6 +22,7 @@ def test_manifest_covers_every_versioned_part_of_the_agent():
     assert set(manifest["components"]) == _SECTIONS
     assert set(manifest["component_hashes"]) == _SECTIONS
     assert set(manifest["components"]["instructions"]) == {
+        "planner",
         "supervisor",
         "query_rewriter",
         "analytics",
@@ -84,9 +85,20 @@ def test_agent_version_label_joins_release_and_fingerprint():
 
 
 def test_git_sha_prefers_ci_environment(monkeypatch: pytest.MonkeyPatch):
+    # Cleared explicitly: a GitHub runner always sets GITHUB_SHA, which wins.
+    monkeypatch.delenv("GIT_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
     monkeypatch.setenv("CI_COMMIT_SHA", "abcdef1234567890")
 
     assert versioning.git_sha() == "abcdef123456"
+
+
+def test_git_sha_reads_github_actions(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("GIT_SHA", raising=False)
+    monkeypatch.setenv("GITHUB_SHA", "1234567890abcdef")
+    monkeypatch.setenv("CI_COMMIT_SHA", "ignored")
+
+    assert versioning.git_sha() == "1234567890ab"
 
 
 def test_trace_metadata_is_flat_strings():

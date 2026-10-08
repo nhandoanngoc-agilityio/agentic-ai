@@ -100,6 +100,7 @@ def test_latency_and_cost_per_graph_run(tmp_path: Path):
     m = compute_metrics([], audit, model="m", prices=PRICES)
 
     assert m.latency_p95_ms == 3000.0
+    assert m.latency_median_ms == 2250.0  # runs a (1500) and b (3000)
     # run a: 1000*2/1e6 + 500*10/1e6 = 0.007; run b: 0.0 -> mean 0.0035
     assert m.cost_per_run_usd == pytest.approx(0.0035)
 
@@ -108,6 +109,7 @@ def test_no_graph_runs_means_no_latency_or_cost(tmp_path: Path):
     m = compute_metrics([], tmp_path / "none.jsonl", model="m", prices=PRICES)
 
     assert m.latency_p95_ms is None and m.cost_per_run_usd is None
+    assert m.latency_median_ms is None
     assert m.task_success == 0.0 and m.safety == 0.0 and m.tool_accuracy == 0.0
 
 
@@ -121,3 +123,38 @@ def test_metrics_round_trip_through_dict():
     m = EvalMetrics(1.0, 0.9, {"reporting": 0.9}, 0.0, 1.0, 1.0, 10.0, 0.01, {"a/b": 1.0}, 3)
 
     assert EvalMetrics(**asdict(m)) == m
+
+
+def test_model_calls_are_counted_per_graph_run_and_component(tmp_path: Path):
+    usage = {"event": "llm_usage", "input_tokens": 1, "output_tokens": 1}
+    audit = _audit(
+        tmp_path / "a.jsonl",
+        [
+            {"event": "run_latency", "thread_id": "eval-a-r0", "duration_ms": 1000},
+            {"event": "run_latency", "thread_id": "eval-b-r0", "duration_ms": 1000},
+            {**usage, "thread_id": "eval-a-r0", "component": "planner"},
+            {**usage, "thread_id": "eval-a-r0", "component": "supervisor_router"},
+            {**usage, "thread_id": "eval-a-r0", "component": "supervisor_router"},
+            {**usage, "thread_id": "eval-b-r0", "component": "planner"},
+            {**usage, "thread_id": None, "component": "planner"},  # not a graph run
+        ],
+    )
+
+    m = compute_metrics([], audit, model="m", prices=PRICES)
+
+    assert m.model_calls_per_run == 2.0
+    assert m.model_calls_by_component == {"planner": 1.0, "supervisor_router": 1.0}
+
+
+def test_no_graph_runs_means_no_model_call_count(tmp_path: Path):
+    m = compute_metrics([], tmp_path / "none.jsonl", model="m", prices=PRICES)
+
+    assert m.model_calls_per_run is None and m.model_calls_by_component == {}
+
+
+def test_metrics_record_the_usage_accounting_they_were_measured_with(tmp_path: Path):
+    from market_research_team.evaluation.metrics import USAGE_ACCOUNTING
+
+    m = compute_metrics([], tmp_path / "none.jsonl", model="m", prices=PRICES)
+
+    assert m.usage_accounting == USAGE_ACCOUNTING == 2

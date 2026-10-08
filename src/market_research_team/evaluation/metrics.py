@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+import statistics
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,24 @@ class EvalMetrics:
     cost_per_run_usd: float | None
     case_pass_rate: dict[str, float]
     repeats: int
+    # Median graph-run time, reported against the baseline as a warning only:
+    # run time moves with provider response time (a slow hour moved every run
+    # +42% with the agent doing less work). Defaulted so baselines recorded
+    # before these fields existed still load.
+    latency_median_ms: float | None = None
+    # Agent work, independent of provider speed: model calls per graph run
+    # (mean), and per component. A loop or a longer route raises it; a slow
+    # provider hour does not. None/empty for baselines recorded before it.
+    model_calls_per_run: float | None = None
+    model_calls_by_component: dict[str, float] = field(default_factory=dict)
+    # How model usage was recorded. 1: only plain `.invoke` calls (structured
+    # output and tool calls dropped the usage callback), so cost covered the
+    # report draft alone. 2: every call. Cost and model calls are compared
+    # with a baseline only under the same accounting.
+    usage_accounting: int = 1
+
+
+USAGE_ACCOUNTING = 2
 
 
 def require_price(prices: dict[str, Price], model: str) -> Price:
@@ -67,11 +86,15 @@ def p95(values: list[float]) -> float | None:
     return ordered[math.ceil(0.95 * len(ordered)) - 1]
 
 
+def median(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
 def _rate(results: list[EvalResult]) -> float:
     return sum(r.passed for r in results) / len(results) if results else 0.0
 
 
-def _read_audit(path: Path) -> list[dict[str, Any]]:
+def read_audit(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     events = []
@@ -105,7 +128,7 @@ def compute_metrics(
     results: list[EvalResult], audit_path: Path, *, model: str, prices: dict[str, Price]
 ) -> EvalMetrics:
     price = require_price(prices, model)
-    events = _read_audit(audit_path)
+    events = read_audit(audit_path)
 
     task_results = [r for r in results if r.category not in _OWN_METRIC_CATEGORIES]
     quality, quality_by_category, unjudged = _quality(results)
@@ -128,6 +151,14 @@ def compute_metrics(
                 e.get("duration_ms", 0.0)
             )
     run_cost = {thread_id: 0.0 for thread_id in run_ms}
+    # One `llm_usage` event per model call (SDK retries happen inside a call).
+    calls = {thread_id: 0 for thread_id in run_ms}
+    by_component: dict[str, int] = {}
+    for e in events:
+        if e.get("event") == "llm_usage" and e.get("thread_id") in calls:
+            calls[e["thread_id"]] += 1
+            component = str(e.get("component") or "untagged")
+            by_component[component] = by_component.get(component, 0) + 1
     for e in events:
         if e.get("event") == "llm_usage" and e.get("thread_id") in run_cost:
             run_cost[e["thread_id"]] += (
@@ -147,7 +178,15 @@ def compute_metrics(
         tool_accuracy=tool_accuracy,
         safety=_rate([r for r in results if r.category == "safety"]),
         latency_p95_ms=p95(list(run_ms.values())),
+        latency_median_ms=median(list(run_ms.values())),
+        model_calls_per_run=(sum(calls.values()) / len(run_ms) if run_ms else None),
+        model_calls_by_component={
+            component: count / len(run_ms) for component, count in sorted(by_component.items())
+        }
+        if run_ms
+        else {},
         cost_per_run_usd=sum(run_cost.values()) / len(run_cost) if run_cost else None,
         case_pass_rate={key: _rate(rs) for key, rs in sorted(case_results.items())},
         repeats=len({r.repeat for r in results}),
+        usage_accounting=USAGE_ACCOUNTING,
     )

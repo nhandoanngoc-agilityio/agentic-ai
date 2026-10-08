@@ -1,3 +1,5 @@
+import pytest
+
 from market_research_team.evaluation import checks
 
 
@@ -93,3 +95,139 @@ def test_check_any_value_matches_fails_on_empty_results() -> None:
 def test_check_any_value_matches_passes_trivially_with_no_expectation() -> None:
     passed, _ = checks.check_any_value_matches([], [], tolerance=1.0)
     assert passed
+
+
+# --- agentic-behaviour checks ----------------------------------------------------
+
+
+def test_check_supervisor_route_requires_the_expected_decision_and_a_focused_gap() -> None:
+    from market_research_team.evaluation.checks import check_supervisor_route
+
+    assert check_supervisor_route("research", "Globex ACV?", ("research",), ["globex"])[0]
+    assert not check_supervisor_route("analytics", None, ("research",), ["globex"])[0]
+    passed, detail = check_supervisor_route("research", "Acme seats?", ("research",), ["globex"])
+    assert not passed and "focus missing ['globex']" in detail
+    # A focus is only checked on a hand-back to Research.
+    assert check_supervisor_route("reporting", None, ("reporting",), ["globex"])[0]
+    # The right step reached through a fallback is not the model's decision.
+    assert not check_supervisor_route("reporting", None, ("reporting",), [], "fallback")[0]
+
+
+def test_check_plan_size_coverage_and_no_restated_comparison() -> None:
+    from market_research_team.evaluation.checks import check_plan
+
+    good = ["What does Acme charge per seat?", "What is Globex's contract value?"]
+    assert check_plan(good, min_items=2, max_items=5, must_mention=["acme", "globex"])[0]
+
+    passed, detail = check_plan(
+        ["How do Acme and Globex prices compare?", "Acme customers?"],
+        min_items=2,
+        max_items=5,
+        must_mention=["acme", "globex"],
+    )
+    assert not passed and "restated comparisons: ['How do Acme" in detail
+    assert not check_plan(["Acme price?"], min_items=2, max_items=5, must_mention=[])[0]
+    # Naming both companies as context is not a comparison.
+    market = "What is the size of the market in which Acme and Globex operate?"
+    assert check_plan([*good, market], min_items=2, max_items=5, must_mention=["acme", "globex"])[0]
+    assert not check_plan(good[:1] * 2, min_items=2, max_items=5, must_mention=["globex"])[0]
+
+
+def test_check_inputs_grounded_names_the_invented_inputs() -> None:
+    from market_research_team.evaluation.checks import check_inputs_grounded
+
+    findings = [
+        {"source": "g.md", "content": "ACV between $150K and $400K.", "relevance_score": 1.0}
+    ]
+    grounded = [{"metric": "mean", "value": 275000.0, "detail": "", "inputs": [150000.0, 400000.0]}]
+    invented = [{"metric": "mean", "value": 150.0, "detail": "", "inputs": [120.0, 180.0]}]
+
+    assert check_inputs_grounded(grounded, findings)[0]  # type: ignore[arg-type]
+    passed, detail = check_inputs_grounded(invented, findings)  # type: ignore[arg-type]
+    assert not passed and "'mean': [120.0, 180.0]" in detail
+
+
+def test_check_markdown_table_needs_a_separator_row() -> None:
+    from market_research_team.evaluation.checks import check_markdown_table
+
+    assert check_markdown_table("| Vendor | Price |\n|---|---|\n| Acme | $49 |")[0]
+    assert check_markdown_table("Vendor | Price\n:--- | ---:\nAcme | $49")[0]
+    assert not check_markdown_table("Acme | $49 per seat")[0]
+
+
+_PLAN = [
+    {"id": "q1", "question": "Acme price?", "status": "answered", "sources": ["a.md"]},
+    {"id": "q2", "question": "Globex ACV?", "status": "unanswerable", "sources": []},
+]
+_GOOD_ROUTE = [
+    {"next": "research", "decided_by": "rule"},
+    {"next": "research", "decided_by": "llm", "focus": "Globex ACV?"},
+    {"next": "analytics", "decided_by": "rule"},
+    {"next": "reporting", "decided_by": "llm"},
+    {"next": "FINISH", "decided_by": "rule"},
+]
+
+
+def test_check_trajectory_passes_a_clean_run() -> None:
+    from market_research_team.evaluation.checks import check_trajectory
+
+    passed, detail = check_trajectory(_PLAN, _GOOD_ROUTE, "## Open questions\n- Globex ACV?")  # type: ignore[arg-type]
+
+    assert passed, detail
+    assert detail.startswith("route: research(rule) -> research(llm) -> analytics(rule)")
+
+
+@pytest.mark.parametrize(
+    ("route", "report", "problem"),
+    [
+        (_GOOD_ROUTE, "no open questions here", "unanswered but not in the report"),
+        (
+            [*_GOOD_ROUTE[:3], {"next": "reporting", "decided_by": "fallback"}],
+            "Globex ACV?",
+            "1 fallback route(s)",
+        ),
+        (
+            [{"next": "research", "decided_by": "llm"}],
+            "Globex ACV?",
+            "1 hand-back(s) without a focus",
+        ),
+        (
+            [{"next": "research", "decided_by": "rule"}] * 4,
+            "Globex ACV?",
+            "4 research passes for 2 plan item(s)",
+        ),
+        (
+            [
+                *_GOOD_ROUTE[:2],
+                {
+                    "next": "analytics",
+                    "decided_by": "rule",
+                    "rationale": "visit cap reached: moving on to analysis",
+                },
+            ],
+            "Globex ACV?",
+            "the visit cap forced progress",
+        ),
+        (
+            [
+                {"next": "research", "decided_by": "llm", "focus": "Globex ACV?"},
+                {"next": "research", "decided_by": "llm", "focus": "Globex ACV?"},
+            ],
+            "Globex ACV?",
+            "targeted more than once: ['Globex ACV?']",
+        ),
+    ],
+)
+def test_check_trajectory_names_each_problem(route, report, problem) -> None:
+    from market_research_team.evaluation.checks import check_trajectory
+
+    passed, detail = check_trajectory(_PLAN, route, report)  # type: ignore[arg-type]
+
+    assert not passed
+    assert problem in detail
+
+
+def test_check_trajectory_fails_without_a_plan() -> None:
+    from market_research_team.evaluation.checks import check_trajectory
+
+    assert "no plan" in check_trajectory([], _GOOD_ROUTE, "")[1]

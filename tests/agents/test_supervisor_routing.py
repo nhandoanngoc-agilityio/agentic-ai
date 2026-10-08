@@ -16,6 +16,7 @@ from market_research_team.state import AgentState, AnalyticsResult, ResearchFind
 def _fake_research_pipeline(
     objective: str,
     focus: str | None = None,
+    exclude: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     findings: list[ResearchFinding] = [
         {
@@ -126,6 +127,7 @@ def test_supervisor_visits_agents_in_order() -> None:
     agent_names = [m.name for m in result["messages"] if getattr(m, "name", None)]
 
     assert agent_names == [
+        "planner",
         "supervisor",
         "research_agent",
         "supervisor",

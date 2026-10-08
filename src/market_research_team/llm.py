@@ -7,6 +7,9 @@ the pure decision/drafting functions elsewhere need to change, since they
 all accept a plain `BaseChatModel`.
 """
 
+from typing import Any
+
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 
 from market_research_team.config import settings
@@ -31,12 +34,22 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
     callback itself.
     """
 
-    # Only pass parameters that are pinned, so unset ones keep the provider default.
-    params: dict[str, float | int | str] = {}
+    # Timeout and retries are always pinned (a call with no deadline can hang a
+    # run); sampling parameters only when set, so unset ones keep the provider
+    # default.
+    params: dict[str, Any] = {
+        "timeout": settings.llm_timeout_seconds,
+        "max_retries": settings.llm_max_retries,
+    }
     if settings.llm_temperature is not None:
         params["temperature"] = settings.llm_temperature
     if settings.llm_max_tokens is not None:
         params["max_tokens"] = settings.llm_max_tokens
+
+    # On the model itself, not `.with_config(...)`: `with_structured_output` and
+    # `bind_tools` build new runnables from the model and drop config callbacks,
+    # so only plain `.invoke` calls (the report draft) were being recorded.
+    callbacks: list[BaseCallbackHandler] = [TokenUsageCallbackHandler()]
 
     provider = provider or settings.llm_provider
     model_name = model or model_id_for(provider)
@@ -47,12 +60,12 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
 
         if settings.openai_api_key:
             params["api_key"] = settings.openai_api_key
-        chat_model: BaseChatModel = ChatOpenAI(model=model_name, **params)
+        chat_model: BaseChatModel = ChatOpenAI(model=model_name, callbacks=callbacks, **params)
     else:
         from langchain_anthropic import ChatAnthropic
 
         if settings.anthropic_api_key:
             params["api_key"] = settings.anthropic_api_key
-        chat_model = ChatAnthropic(model=model_name, **params)
+        chat_model = ChatAnthropic(model=model_name, callbacks=callbacks, **params)
 
-    return chat_model.with_config({"callbacks": [TokenUsageCallbackHandler()]})
+    return chat_model

@@ -20,6 +20,7 @@ from langgraph.types import Command
 
 from market_research_team.agents.analytics import node as analytics_node_module
 from market_research_team.agents.reporting import node as reporting_node_module
+from market_research_team.agents.reporting.node import report_filename
 from market_research_team.agents.research import node as research_node_module
 from market_research_team.agents.supervisor import router as supervisor_router_module
 from market_research_team.graph import build_production_graph, run_graph
@@ -29,6 +30,7 @@ from market_research_team.state import AgentState, AnalyticsResult, ResearchFind
 def _fake_research_pipeline(
     objective: str,
     focus: str | None = None,
+    exclude: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     return (
         [{"source": "mock", "content": f"finding for {objective}", "relevance_score": 0.9}],
@@ -153,5 +155,6 @@ def test_approval_still_completes_the_real_graph_with_the_same_wiring() -> None:
 
     assert "__interrupt__" not in result
     assert result["next"] == "FINISH"
-    assert result["report_path"] == "reports/assess-competitor-pricing-strategy.md"
+    expected = report_filename("Assess competitor pricing strategy", thread_id)
+    assert result["report_path"] == f"reports/{expected}"
     assert result.get("report_discarded") is None

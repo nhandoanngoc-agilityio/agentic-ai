@@ -40,7 +40,7 @@ def test_with_error_boundary_catches_exception_and_sets_error() -> None:
     wrapped = with_error_boundary("research", _node)
     result = wrapped(_state())
 
-    assert result["error"] == "research failed: boom"
+    assert result["error"] == "research failed (RuntimeError): boom"
     assert result["messages"][0].name == "research"
     assert "boom" in result["messages"][0].content
 
@@ -53,7 +53,7 @@ def test_with_error_boundary_applies_fallback_updates_on_error() -> None:
     result = wrapped(_state())
 
     assert result["next"] == "FINISH"
-    assert result["error"] == "supervisor failed: boom"
+    assert result["error"] == "supervisor failed (RuntimeError): boom"
 
 
 def test_with_error_boundary_reraises_graph_interrupt_instead_of_swallowing_it() -> None:
@@ -111,6 +111,8 @@ def test_with_error_boundary_records_node_latency_on_error(
 
     assert len(calls) == 1
     assert calls[0]["outcome"] == "error"
+    assert calls[0]["error_type"] == "RuntimeError"
+    assert calls[0]["transient"] is False
 
 
 def test_with_error_boundary_records_node_latency_on_interrupt(
@@ -146,3 +148,39 @@ def test_with_error_boundary_does_not_interfere_on_success_path() -> None:
     wrapped(_state())
 
     assert calls == ["Assess competitor pricing strategy"]
+
+
+class RateLimitError(Exception):
+    """Stands in for `openai.RateLimitError` / `anthropic.RateLimitError`."""
+
+
+@pytest.mark.parametrize(
+    ("exc", "transient"),
+    [
+        (TimeoutError("slow"), True),
+        (ConnectionResetError("reset"), True),  # a ConnectionError subclass
+        (RateLimitError("429"), True),
+        (RuntimeError("bug"), False),
+        (ValueError("bad input"), False),
+    ],
+)
+def test_is_transient_classifies_by_exception_class(exc: Exception, transient: bool) -> None:
+    assert guardrails_module.is_transient(exc) is transient
+
+
+def test_with_error_boundary_marks_a_transient_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        guardrails_module.audit,
+        "record",
+        lambda event, thread_id, **fields: calls.append({"event": event, **fields}),
+    )
+
+    def _node(_state: AgentState) -> dict[str, Any]:
+        raise RateLimitError("429 too many requests")
+
+    result = with_error_boundary("analytics", _node)(_state())
+
+    assert result["error"] == "analytics failed (RateLimitError, transient): 429 too many requests"
+    assert calls[0]["error_type"] == "RateLimitError"
+    assert calls[0]["transient"] is True

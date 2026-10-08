@@ -16,7 +16,7 @@ from langsmith import Client, evaluate
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.reporting.node import draft_report
-from market_research_team.agents.supervisor.router import decide_next_step
+from market_research_team.agents.supervisor.router import decide_route
 from market_research_team.config import settings
 from market_research_team.evaluation import checks, judges
 from market_research_team.evaluation.golden_dataset import (
@@ -132,11 +132,16 @@ def _supervisor_decision_examples() -> list[dict[str, Any]]:
     return [
         {
             "inputs": {
+                "objective": case.objective,
+                "plan": case.plan,
                 "research_findings": case.research_findings,
                 "analytics_results": case.analytics_results,
                 "report_path": case.report_path,
             },
-            "outputs": {"allowed_decisions": list(case.allowed_decisions)},
+            "outputs": {
+                "allowed_decisions": list(case.allowed_decisions),
+                "focus_keywords": case.focus_keywords,
+            },
         }
         for case in SUPERVISOR_DECISION_CASES
     ]
@@ -145,25 +150,33 @@ def _supervisor_decision_examples() -> list[dict[str, Any]]:
 def target_supervisor_decision(inputs: dict[str, Any], *, llm: BaseChatModel) -> dict[str, Any]:
     state: AgentState = {
         "messages": [],
-        "objective": "Assess competitor pricing strategy",
+        "objective": inputs.get("objective", "Assess competitor pricing strategy"),
         "next": "research",
         "research_findings": inputs["research_findings"],
         "analytics_results": inputs["analytics_results"],
         "report_path": inputs["report_path"],
+        "plan": [dict(item) for item in inputs.get("plan", [])],  # type: ignore[misc]
     }
-    decision = decide_next_step(state, llm)
-    return {"decision": decision}
+    route = decide_route(state, llm)
+    return {
+        "decision": route.next,
+        "focus": route.research_focus,
+        "rationale": route.rationale,
+        "decided_by": route.decided_by,
+    }
 
 
 def deterministic_evaluator_supervisor_decision(run: Any, example: Any) -> dict[str, Any]:
-    decision = (run.outputs or {}).get("decision")
-    allowed = (example.outputs or {}).get("allowed_decisions", [])
-    passed = decision in allowed
-    return {
-        "key": "deterministic",
-        "score": 1.0 if passed else 0.0,
-        "comment": f"decision={decision!r} (allowed: {allowed})",
-    }
+    outputs = run.outputs or {}
+    expected = example.outputs or {}
+    passed, detail = checks.check_supervisor_route(
+        outputs.get("decision"),  # type: ignore[arg-type]
+        outputs.get("focus"),
+        tuple(expected.get("allowed_decisions", [])),
+        expected.get("focus_keywords", []),
+        outputs.get("decided_by", "llm"),
+    )
+    return {"key": "deterministic", "score": 1.0 if passed else 0.0, "comment": detail}
 
 
 def llm_judge_supervisor_decision(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
@@ -202,11 +215,14 @@ def deterministic_evaluator_analytics(run: Any, example: Any) -> dict[str, Any]:
     value_passed, value_detail = checks.check_any_value_matches(
         results, expected.get("plausible_values", []), expected.get("tolerance", 1.0)
     )
-    passed = count_passed and value_passed
+    inputs_passed, inputs_detail = checks.check_inputs_grounded(
+        results, (example.inputs or {}).get("findings", [])
+    )
+    passed = count_passed and value_passed and inputs_passed
     return {
         "key": "deterministic",
         "score": 1.0 if passed else 0.0,
-        "comment": f"{count_detail}; {value_detail}",
+        "comment": f"{count_detail}; {value_detail}; {inputs_detail}",
     }
 
 
@@ -224,10 +240,12 @@ def _reporting_examples() -> list[dict[str, Any]]:
                 "objective": case.objective,
                 "findings": case.findings,
                 "results": case.results,
+                "feedback": case.feedback,
             },
             "outputs": {
                 "required_sections": case.required_sections,
                 "required_facts": case.required_facts,
+                "require_table": case.require_table,
             },
         }
         for case in REPORTING_CASES
@@ -235,7 +253,13 @@ def _reporting_examples() -> list[dict[str, Any]]:
 
 
 def target_reporting(inputs: dict[str, Any], *, llm: BaseChatModel) -> dict[str, Any]:
-    report = draft_report(inputs["objective"], inputs["findings"], inputs["results"], llm)
+    report = draft_report(
+        inputs["objective"],
+        inputs["findings"],
+        inputs["results"],
+        llm,
+        feedback=inputs.get("feedback"),
+    )
     return {"report": report}
 
 
@@ -247,12 +271,11 @@ def deterministic_evaluator_reporting(run: Any, example: Any) -> dict[str, Any]:
     )
     required_facts = expected.get("required_facts", [])
     facts_passed, facts_detail = checks.check_contains_all(report, required_facts)
-    passed = sections_passed and facts_passed
-    return {
-        "key": "deterministic",
-        "score": 1.0 if passed else 0.0,
-        "comment": f"{sections_detail}; {facts_detail}",
-    }
+    passed, comment = sections_passed and facts_passed, f"{sections_detail}; {facts_detail}"
+    if expected.get("require_table"):
+        table_passed, table_detail = checks.check_markdown_table(report)
+        passed, comment = passed and table_passed, f"{comment}; {table_detail}"
+    return {"key": "deterministic", "score": 1.0 if passed else 0.0, "comment": comment}
 
 
 def llm_judge_reporting(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:

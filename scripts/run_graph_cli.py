@@ -20,18 +20,11 @@ from market_research_team.feedback.retention import maybe_auto_prune
 from market_research_team.graph import build_production_graph, run_graph
 from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
-from market_research_team.state import AgentState
+from market_research_team.state import new_run_state
 
 
-def _initial_state(objective: str) -> AgentState:
-    return {
-        "messages": [],
-        "objective": objective,
-        "next": "research",
-        "research_findings": [],
-        "analytics_results": [],
-        "report_path": None,
-    }
+def _thread_has_run(compiled_graph: Any, thread_id: str) -> bool:
+    return bool(compiled_graph.get_state({"configurable": {"thread_id": thread_id}}).values)
 
 
 def _prompt_for_approval(interrupt_value: dict[str, Any]) -> dict[str, Any]:
@@ -61,7 +54,10 @@ def main() -> None:
     parser.add_argument(
         "--thread-id",
         default=None,
-        help="Resume this specific thread id; a random one is generated otherwise.",
+        help=(
+            "Thread id for this run (must be new; a random one is generated otherwise). "
+            "A paused run is resumed within the same CLI session, not by reusing its id."
+        ),
     )
     parser.add_argument(
         "--recursion-limit",
@@ -80,9 +76,15 @@ def main() -> None:
             audit.record_input_rejection(thread_id, args.objective, exc)
         parser.error(str(exc))
     compiled_graph = build_production_graph(get_checkpointer())
+    if args.thread_id and _thread_has_run(compiled_graph, thread_id):
+        # A fresh run on an old thread would inherit its accumulated state
+        # (guardrail events, messages, flags), so refuse rather than mix runs.
+        parser.error(
+            f"thread id {thread_id!r} already has a run; omit --thread-id or use a new one"
+        )
 
     result = run_graph(
-        _initial_state(objective),
+        new_run_state(objective),
         compiled_graph=compiled_graph,
         thread_id=thread_id,
         recursion_limit=args.recursion_limit,

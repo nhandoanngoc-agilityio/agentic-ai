@@ -14,6 +14,7 @@ pytest                                       # hermetic, no API key needed
 ruff check src tests scripts gradio_app && ruff format --check src tests scripts gradio_app
 basedpyright                                 # type check; fails only on errors not in .basedpyright/baseline.json
 pytest --cov                                 # coverage report; fails under 93%
+scripts/ci_local.sh [--worktree]             # run the GitHub Actions CI job locally on a clean copy before pushing
 python scripts/seed_vectorstore.py           # rebuild Chroma index from data/raw/
 python scripts/run_graph_cli.py "<objective>" [--thread-id id]   # REAL LLM CALLS
 python scripts/run_gradio.py                 # launches the Gradio UI
@@ -33,8 +34,12 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
   state update. State schema lives in `state.py`; add fields there first.
 - `pytest` is hermetic: fake LLMs, no network, no seeded vector store, no API key.
   A test that needs a real model belongs in the eval suite, not in `tests/`.
-- Supervisor routing is in `agents/supervisor/router.py` (`decide_next_step`,
-  `route_from_supervisor`). New routes need the conditional-edge map in `graph.py`.
+- Supervisor routing is in `agents/supervisor/router.py` (`decide_route`,
+  `route_from_supervisor`). New routes need the conditional-edge map in `graph.py`. The
+  `planner` node runs before the first supervisor decision; `tests/conftest.py` stubs
+  `run_planner` with the one-item fallback plan so graph tests stay offline.
+- A fresh run's input comes from `state.new_run_state()`; a new `AgentState` field must be
+  reset there (`tests/graph/test_state.py` fails otherwise).
 - Retrieval code (query rewriting, retriever, reranker) lives in `retrieval/`; the
   research node in `agents/research/` only orchestrates it. Guardrails (input validation,
   output filters, shared regex patterns, audit log) are in `security/`; a node that blocks,
@@ -43,7 +48,9 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
 - Agent version = `<pyproject version>+<fingerprint>` from `versioning.py`, which hashes
   prompts (`SYSTEM_PROMPT` in each agent), model + params, tool schemas, knowledge/index
   and safety limits. It is stamped on Langfuse traces, audit lines and eval results. A new
-  behavioural knob (prompt, limit, pattern list) must be added to the manifest there.
+  behavioural knob (prompt, limit, pattern list) must be added to the manifest there. Run
+  limits live in `RunPolicy` (`config.py`, read as `settings.run_policy`), not as module
+  constants.
 - Release gate: `evals/gate.toml` (thresholds, tolerances, judge model, prices) and
   `evals/baseline.json` (last approved metrics per provider) are committed. Only
   `run_evals.py --repeats 3 --update-baseline` writes the baseline; committing it is the

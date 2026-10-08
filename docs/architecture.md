@@ -211,3 +211,176 @@ Gradio handlers are generators: `run_with_progress` runs the whole run on one wo
 queue to a "Working…" chat turn. The approval row gained Discard (`{"discard": True}`), which the
 graph already supported for the comparison UI.
 
+## 2026-10-06 — Planning, coverage-driven routing, and harness fixes
+
+Follows an audit of the project as an agentic system: the harness was strong, but the
+supervisor mostly picked among 2–3 options that code had already narrowed, and recorded no
+reason. Changes, in the order they landed:
+
+- **CI**: `.gitlab-ci.yml` had been emptied again (the 2026-10-02 entry above no longer held).
+  Restored with `ruff check`, `ruff format --check`, `basedpyright` and `pytest --cov`.
+- **Harness**: `run_graph` no longer crashes when a resume hits the recursion limit (it spread a
+  `Command` as if it were state; basedpyright had flagged this and it sat in the baseline).
+  One `new_run_state()` replaces three diverging builders. The visit cap reads a
+  `supervisor_visits` counter instead of counting messages, and the CLI refuses a
+  `--thread-id` that already has a run. Model calls get an explicit timeout and SDK retries,
+  and the MCP write a timeout. The error boundary labels each failure with its exception type
+  and whether it was transient, and the harvester tags transient ones `transient_error`.
+  Retries stay at the call level on purpose: retrying a node would repeat tool calls already
+  made, or the approval interrupt.
+- **Grounding**: analytics tool arguments no longer count as evidence for the report (an
+  invented input used to ground itself and its result). Inputs not found in the findings
+  raise `ungrounded_tool_input`. Analytics now fences findings like Reporting
+  (`security/fencing.py`). Tools take a `label`, so the report names metrics.
+- **Planner + coverage-driven supervisor**: a `planner` node (`input_guard → planner →
+  supervisor`) writes 2–4 sub-questions. Each LLM supervisor decision returns a rationale,
+  coverage per item (validated against the findings' sources) and the item to research next.
+  Research is offered only while an item is open. A targeted pass that adds nothing marks only
+  that item unanswerable. Reporting lists unanswered items under "Open questions". Every route
+  is a `route_decision` audit event with `decided_by` (`rule`, `llm`, `fallback`).
+- **Evals**: the supervisor cases now each have one right answer (the old ones passed for any
+  allowed choice). New `planning` and `trajectory` categories (the trajectory reuses the
+  full-pipeline run and its `route_decision` events). The analytics case checks inputs are
+  grounded, a reporting case checks reviewer feedback is acted on, and a safety case checks that
+  invented tool inputs are flagged. Hermetic graph tests cover a transient failure mid-run and
+  an MCP write timeout after approval.
+
+The baseline in `evals/baseline.json` predates all of this; it needs a
+`run_evals.py --repeats 3 --update-baseline` run (paid).
+
+### Same day — first gate run of the planner: a research loop
+
+The first `run_evals.py --repeats 3` after the planner failed the gate on baseline
+`task_success` (0.905 vs 1.0) and `latency_p95_ms` (41.8 s vs 27.3 s, limit +25%). Every one
+of the 9 graph runs went `research ×6` until the visit cap forced Analytics: no plan item was
+ever judged answered, and the same item was often retargeted. Causes and fixes:
+
+- The supervisor anchored on items shown as `[open]` and could skip `coverage` (it had a
+  default). Open items are now shown as "to judge", `coverage` is required, and the prompt says
+  an item is answered when the findings state its facts, estimates and ranges included. This
+  was also the failing `plan_covered_analysis_done` case (2 of 3 repeats chose research).
+- The supervisor saw 160 characters per finding; real chunks run to 800, so the answering
+  figure was often cut off. Now 500.
+- A sub-question only became unanswerable when a targeted pass added nothing, which a small
+  corpus rarely produces. Each item now gets one targeted search (`attempted`); Research is
+  offered only while an open item hasn't had it. This bounds research passes at plan items + 1
+  regardless of the model's judgment.
+- The planner wrote comparison and benchmark questions the corpus can't answer (the failing
+  `planning` case). It now writes 2–4 single-document questions and never phrases comparisons.
+- The trajectory check passed all of this. It now also fails when the visit cap fires or a
+  sub-question is targeted twice.
+
+### Same day — second gate run: an analytics loop
+
+With research bounded, the next run (`task_success` 0.833, p95 42.3 s) showed every graph run
+going `analytics(rule) > analytics(llm|fallback) [> analytics]` until the visit cap forced
+Reporting. Analytics is the slowest node (5–9 s), so the repeats were most of the regression.
+
+- Analytics is offered again only when the findings changed since it last ran (Research bumps
+  `findings_version`; Analytics records `analyzed_findings_version`).
+- The decision schema is built per call with `next` limited to the allowed steps, and an
+  invalid choice now falls forward (`allowed[-1]`, as the exception path already did) rather
+  than back to `allowed[0]`, which had re-run Analytics.
+- With one step left, code still decides by rule, unless a plan item is open: then the model
+  is asked (its choice limited to that step) so the last targeted search gets judged and a
+  found answer isn't reported as an open question.
+- The visit cap moved from 6 to 8: with at most 4 targeted searches and Analytics only on new
+  findings, a run legitimately needs up to 7 decisions, so the cap is a safety net again.
+- The supervisor prompt says a range or estimate is an answer (the model kept Globex's
+  "$150K–$400K" open "for precision"). The supervisor eval now fails a route reached by
+  fallback, and the planning check flags only questions phrased as comparisons, not a
+  market question that names both companies as context.
+
+## 2026-10-07 — Targeted searches return new chunks; CI reproducible locally
+
+A live CLI run ("Compare Acme and Globex pricing and recommend a competitive positioning")
+reported market size as unanswerable although `market_overview.md` covers it. The targeted
+search retrieved 12 candidates, but ranked them against objective + gap: the pricing objective
+put the already-held pricing chunks in all 5 top slots, the pass counted "0 new", and the item
+was marked unanswerable.
+
+- A targeted search now drops chunks already held before reranking (`exclude`), and ranks
+  against the gap alone.
+- "Unanswerable" means the targeted search found no relevant new chunk above the rerank floor,
+  not that its chunks failed to survive the 10-finding cap.
+- A targeted pass's findings are kept when merging (`keep_new`); the lowest-scoring held ones
+  make room. Scores from different passes are ranked against different queries, so comparing
+  them could drop exactly the chunk the pass was sent for.
+- When code redirects a hand-back away from an item the model chose (already searched), the
+  rationale says so instead of carrying the model's reasoning about the other item.
+
+CI: the first push failed because `pyproject.toml` points basedpyright at `./.venv` (absent in
+the job) and the job installed only `.[dev]`, so the Postgres imports were unresolved. CI now
+creates `.venv`, installs `.[dev,prod]` and runs `scripts/ci_checks.sh`;
+`scripts/ci_local.sh` runs the same script on a clean copy with an empty environment. That run
+also exposed two tests passing only because the developer's shell exported `OPENAI_API_KEY`;
+`tests/conftest.py` now gives every test dummy keys.
+
+### Same day — release gate: latency compared by the median run
+
+A gate run after the research fix failed only `latency_p95_ms` vs baseline (38.5 s vs 26.4 s,
++46%). Routes were shorter than in the baseline run, but every model call was slower, the
+planner included (+36%, and the fix cannot touch it): provider response time. With 9 graph
+runs, "p95" is the slowest run, and the baseline was itself one fast sample.
+
+The baseline comparison now uses `latency_median_ms` (same tolerance, +25%); p95 stays as the
+absolute cap (`latency_p95_ms_max`). A baseline recorded before the median existed is compared
+by its p95 (looser) with a warning, until the next `--update-baseline` records a median.
+
+Known limit: the median absorbs one slow run, not a slow hour. In the failing run the median
+also moved (22.4 s to 31.7 s), so against a median baseline it would still have failed.
+
+
+### Same day — the gate compares agent work, and model usage is counted for every call
+
+The median comparison above still failed the slow-provider run against a median baseline, so
+the gate now compares **work** with the baseline and treats time as a cap:
+
+- New metrics: `model_calls_per_run` (mean model calls per graph run) and
+  `model_calls_by_component`. Gated against the baseline at +25%
+  (`model_calls_max_increase` in `gate.toml`), next to cost per run (+20%). Loops and longer
+  routes move both; a slow provider hour moves neither.
+- Wall-clock: p95 stays the absolute cap (120 s). The median run time vs the baseline became a
+  warning that shows the model-call change beside it.
+
+Building that exposed two older bugs in usage recording:
+
+- `get_chat_model()` attached the usage callback with `.with_config(...)`. `bind_tools` and
+  `with_structured_output` build new runnables from the model and drop config callbacks, so
+  only plain `.invoke` calls were recorded: inside a graph run, the report draft alone. Every
+  `cost_per_run_usd` and token summary before this counted only that call. The callback now
+  sits on the model object (`callbacks=` in the constructor), which every wrapper reuses.
+- The callback took `tags[0]` as the component, and inside a graph run LangGraph's own tag
+  (`seq:step:1`) comes first. It now takes the first tag without a colon.
+
+Because cost and call counts recorded before and after are not comparable, metrics carry
+`usage_accounting` (1 before, 2 after). The gate compares cost and model calls with a baseline
+only under the same accounting, and warns otherwise; the absolute cost cap still applies. The
+next `--update-baseline` records version 2.
+
+## 2026-10-07 — Harness polish: reports kept, self-check, run usage, RunPolicy
+
+- **No silent overwrite.** Each run writes `<objective slug>-<run id>.md`, the run id a short
+  hash of the thread id (stable across a resumed review, distinct between runs). The MCP
+  `write_report` refuses to replace an existing report with different content unless called
+  with `overwrite=true`; an identical rewrite (a review replayed after a crash) succeeds.
+- **Self-check redraft.** When the output check marks figures it can't trace to the evidence,
+  `reporting_node` redrafts once with a note naming them, before the reviewer sees the draft;
+  what remains travels as warnings. Recorded as a `policy / self_check_redraft` event. Only
+  unverified figures trigger it: section headings are checked by the eval suite.
+- **Run usage in `run_finished`.** The usage callback keeps per-thread totals in memory; the
+  supervisor's `run_finished` line carries `model_calls`, `input_tokens` and `output_tokens`.
+  A run that ends without FINISH drops its tally.
+- **RunPolicy.** The six run limits moved from module constants into `RunPolicy` in
+  `config.py` (overridable as `RUN_POLICY__...`). The manifest keeps the same keys, and the
+  agent version was unchanged by the move (`0.1.0+ac2f6794297e` before and after).
+
+## 2026-10-08 — CI moved to GitHub Actions
+
+The company GitLab runner kept running out of disk while installing the job's dependencies, so
+GitLab CI never completed. The job moved to `.github/workflows/ci.yml` and `.gitlab-ci.yml` was
+removed. Same steps: Python 3.11, a venv at `./.venv` (where `[tool.pyright]` looks), CPU-only
+torch, `.[dev,prod]`, then `scripts/ci_checks.sh`, which `scripts/ci_local.sh` also runs, so a
+local pre-push run still matches CI. Runs on every push and pull request, cancels superseded
+runs, and uploads the JUnit report. `versioning.git_sha()` now also reads `GITHUB_SHA`.
+

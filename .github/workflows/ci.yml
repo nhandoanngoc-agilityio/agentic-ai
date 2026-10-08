@@ -1,0 +1,57 @@
+# Hermetic checks only: no API keys, no network calls from tests, no seeded
+# vector store. The paid eval gate (scripts/run_evals.py) stays manual.
+# Reproduce this job locally before pushing: scripts/ci_local.sh
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch or pull request cancels the older run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ruff, basedpyright, pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          # The venv lives at ./.venv because [tool.pyright] in pyproject.toml
+          # points basedpyright there, the same as a local checkout.
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          # CPU-only torch first, so sentence-transformers doesn't pull CUDA wheels.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # prod too: the Postgres checkpointer code is type-checked, and its
+          # imports must resolve.
+          pip install -e ".[dev,prod]"
+
+      - name: Run the checks
+        run: |
+          . .venv/bin/activate
+          bash scripts/ci_checks.sh
+
+      - name: Upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: report.xml
+          if-no-files-found: ignore

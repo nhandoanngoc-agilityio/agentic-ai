@@ -25,20 +25,25 @@ from langchain_core.language_models import BaseChatModel
 
 from market_research_team.agents.analytics.node import run_tool_calling_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
+from market_research_team.agents.planner.node import make_plan
 from market_research_team.agents.reporting.node import draft_report
 from market_research_team.agents.research.node import run_research_pipeline
-from market_research_team.agents.supervisor.router import decide_next_step
+from market_research_team.agents.supervisor.router import decide_route
 from market_research_team.config import settings
 from market_research_team.evaluation import checks, judges
 from market_research_team.evaluation.golden_dataset import (
     ANALYTICS_CASES,
     FULL_PIPELINE_CASES,
+    PLANNER_CASES,
     QUERY_REWRITE_CASES,
     REPORTING_CASES,
     RETRIEVAL_CASES,
     SUPERVISOR_DECISION_CASES,
+    ReportingCase,
+    SupervisorDecisionCase,
 )
 from market_research_team.evaluation.graph_runs import run_graph_with_decision
+from market_research_team.evaluation.metrics import read_audit
 from market_research_team.evaluation.regression_eval import evaluate_regressions
 from market_research_team.evaluation.results import EvalResult
 from market_research_team.evaluation.safety_eval import evaluate_safety
@@ -46,6 +51,32 @@ from market_research_team.llm import get_chat_model
 from market_research_team.retrieval.query_rewriter import rewrite_and_expand
 from market_research_team.state import AgentState
 from market_research_team.versioning import build_manifest, git_sha
+
+
+def supervisor_case_state(case: SupervisorDecisionCase) -> AgentState:
+    """The state a supervisor case is decided from; shared with the LangSmith mirror."""
+
+    return {
+        "messages": [],
+        "objective": case.objective,
+        "next": "research",
+        "research_findings": case.research_findings,
+        "analytics_results": case.analytics_results,
+        "report_path": case.report_path,
+        "plan": [dict(item) for item in case.plan],  # type: ignore[misc]
+    }
+
+
+def reporting_checks(report: str, case: ReportingCase) -> tuple[bool, str]:
+    """Sections, facts and (when the reviewer asked for one) a table."""
+
+    sections_passed, sections_detail = checks.check_contains_all(report, case.required_sections)
+    facts_passed, facts_detail = checks.check_contains_all(report, case.required_facts)
+    passed, detail = sections_passed and facts_passed, f"{sections_detail}; {facts_detail}"
+    if case.require_table:
+        table_passed, table_detail = checks.check_markdown_table(report)
+        passed, detail = passed and table_passed, f"{detail}; {table_detail}"
+    return passed, detail
 
 
 def _safe_judge(
@@ -126,17 +157,16 @@ def evaluate_supervisor_decision(
 ) -> list[EvalResult]:
     results = []
     for case in SUPERVISOR_DECISION_CASES:
-        state: AgentState = {
-            "messages": [],
-            "objective": "Assess competitor pricing strategy",
-            "next": "research",
-            "research_findings": case.research_findings,
-            "analytics_results": case.analytics_results,
-            "report_path": case.report_path,
-        }
-        decision = decide_next_step(state, llm)
-        passed = decision in case.allowed_decisions
-        detail = f"decision={decision!r} (allowed: {case.allowed_decisions})"
+        route = decide_route(supervisor_case_state(case), llm)
+        decision = route.next
+        passed, detail = checks.check_supervisor_route(
+            route.next,
+            route.research_focus,
+            case.allowed_decisions,
+            case.focus_keywords,
+            route.decided_by,
+        )
+        detail += f"; rationale={route.rationale!r}"
         score, judge_note = _safe_judge(
             judge_llm,
             lambda: judges.judge_supervisor_decision(
@@ -147,6 +177,24 @@ def evaluate_supervisor_decision(
         results.append(
             EvalResult("supervisor_decision", case.name, passed, detail, provider, score, repeat)
         )
+    return results
+
+
+def evaluate_planner(llm: BaseChatModel, provider: str, *, repeat: int = 0) -> list[EvalResult]:
+    """The objective is decomposed into a usable plan: the right size, every
+    compared company covered, one company per sub-question."""
+
+    results = []
+    for case in PLANNER_CASES:
+        questions = [item["question"] for item in make_plan(case.objective, llm)]
+        passed, detail = checks.check_plan(
+            questions,
+            min_items=case.min_items,
+            max_items=case.max_items,
+            must_mention=case.must_mention,
+        )
+        detail += f"; questions={questions!r}"
+        results.append(EvalResult("planning", case.name, passed, detail, provider, repeat=repeat))
     return results
 
 
@@ -166,8 +214,9 @@ def evaluate_analytics(
         value_passed, value_detail = checks.check_any_value_matches(
             outputs, case.plausible_values, case.tolerance
         )
-        passed = count_passed and value_passed
-        detail = f"{count_detail}; {value_detail}"
+        inputs_passed, inputs_detail = checks.check_inputs_grounded(outputs, case.findings)
+        passed = count_passed and value_passed and inputs_passed
+        detail = f"{count_detail}; {value_detail}; {inputs_detail}"
         score, judge_note = _safe_judge(
             judge_llm, lambda: judges.judge_analytics(case.findings, outputs, judge_llm)
         )
@@ -198,11 +247,10 @@ def evaluate_reporting(
 ) -> list[EvalResult]:
     results = []
     for case in REPORTING_CASES:
-        report = draft_report(case.objective, case.findings, case.results, llm)
-        sections_passed, sections_detail = checks.check_contains_all(report, case.required_sections)
-        facts_passed, facts_detail = checks.check_contains_all(report, case.required_facts)
-        passed = sections_passed and facts_passed
-        detail = f"{sections_detail}; {facts_detail}"
+        report = draft_report(
+            case.objective, case.findings, case.results, llm, feedback=case.feedback
+        )
+        passed, detail = reporting_checks(report, case)
         score, judge_note = _safe_judge(
             judge_llm,
             lambda: judges.judge_report(
@@ -227,8 +275,10 @@ def evaluate_full_pipeline(
             thread_id=f"eval-{case.name}-r{repeat}",
             decision={"approved": True},
         )
+        report_text = ""
         report_path = final_state.get("report_path")
         passed = final_state.get("error") is None and bool(report_path)
+        thread_id = f"eval-{case.name}-r{repeat}"
         detail = (
             f"error={final_state.get('error')!r}, "
             f"report_path={report_path!r}, "
@@ -245,6 +295,24 @@ def evaluate_full_pipeline(
         detail += judge_note
         results.append(
             EvalResult("full_pipeline", case.name, passed, detail, provider, score, repeat)
+        )
+        decisions = [
+            event
+            for event in read_audit(settings.audit_log_path)
+            if event.get("event") == "route_decision" and event.get("thread_id") == thread_id
+        ]
+        trajectory_passed, trajectory_detail = checks.check_trajectory(
+            list(final_state.get("plan", [])), decisions, report_text
+        )
+        results.append(
+            EvalResult(
+                "trajectory",
+                case.name,
+                trajectory_passed,
+                trajectory_detail,
+                provider,
+                repeat=repeat,
+            )
         )
     return results
 
@@ -274,6 +342,7 @@ def run_all(
         judged = {"judge_llm": judge_llm, "repeat": repeat}
         results: list[EvalResult] = []
         results += evaluate_query_rewriter(llm, active_provider, **judged)
+        results += evaluate_planner(llm, active_provider, repeat=repeat)
         results += evaluate_retrieval(active_provider, repeat=repeat)
         results += evaluate_supervisor_decision(llm, active_provider, **judged)
         results += evaluate_analytics(llm, active_provider, **judged)

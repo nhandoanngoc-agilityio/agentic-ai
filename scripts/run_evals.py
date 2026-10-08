@@ -251,8 +251,26 @@ def _print_audit_summaries(audit_path: Path) -> None:
             )
 
 
+def _work_line(label: str, metrics: EvalMetrics) -> str:
+    """Model calls and median run time per graph run, for comparing work with time."""
+
+    calls = "n/a" if metrics.model_calls_per_run is None else f"{metrics.model_calls_per_run:.1f}"
+    parts = ", ".join(f"{k} {v:.1f}" for k, v in metrics.model_calls_by_component.items())
+    median = (
+        "n/a" if metrics.latency_median_ms is None else f"{metrics.latency_median_ms / 1000:.1f}s"
+    )
+    return (
+        f"  {label}: {calls} model calls/run"
+        + (f" ({parts})" if parts else "")
+        + (f", median run {median}")
+    )
+
+
 def _print_gate_report(
-    report: GateReport, candidate_manifest: dict[str, Any], baseline: BaselineEntry | None
+    report: GateReport,
+    candidate_manifest: dict[str, Any],
+    baseline: BaselineEntry | None,
+    metrics: EvalMetrics | None = None,
 ) -> None:
     version = f"{candidate_manifest['release']}+{candidate_manifest['fingerprint']}"
     against = f"vs baseline {baseline.agent_version}" if baseline else "no baseline"
@@ -262,6 +280,11 @@ def _print_gate_report(
         print("Changed since baseline:" + ("" if changes else " nothing"))
         for line in changes:
             print(f"  {line}")
+    if metrics is not None:
+        print("Work per graph run:")
+        print(_work_line("candidate", metrics))
+        if baseline:
+            print(_work_line("baseline ", baseline.metrics))
     for warning in report.warnings:
         print(f"  WARNING {warning}")
     for check in report.checks:
@@ -343,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
             report = evaluate_gate(provider, metrics, baseline, config, judge_id=quality_judge_id)
             reports.append(report)
             gate_entries.append({**asdict(report), "agent_version": version, "manifest": manifest})
-            _print_gate_report(report, manifest, baseline)
+            _print_gate_report(report, manifest, baseline, metrics)
 
             if args.update_baseline:
                 refusal = baseline_refusal(report, metrics, config)

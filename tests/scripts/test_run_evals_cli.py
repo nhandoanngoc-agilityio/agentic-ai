@@ -291,3 +291,27 @@ def test_langsmith_key_in_dotenv_passes_the_prereq_check(cli, monkeypatch):
 
     assert code != run_evals.EXIT_CONFIG_ERROR
     assert called["yes"]
+
+
+def test_work_line_shows_calls_per_component_and_median_time() -> None:
+    from market_research_team.evaluation.metrics import EvalMetrics
+
+    metrics = EvalMetrics(
+        task_success=1.0,
+        quality=None,
+        quality_by_category={},
+        unjudged_fraction=0.0,
+        tool_accuracy=1.0,
+        safety=1.0,
+        latency_p95_ms=None,
+        cost_per_run_usd=None,
+        case_pass_rate={},
+        repeats=1,
+        latency_median_ms=22400.0,
+        model_calls_per_run=9.5,
+        model_calls_by_component={"planner": 1.0, "supervisor_router": 3.5},
+    )
+
+    assert run_evals._work_line("candidate", metrics) == (
+        "  candidate: 9.5 model calls/run (planner 1.0, supervisor_router 3.5), median run 22.4s"
+    )
