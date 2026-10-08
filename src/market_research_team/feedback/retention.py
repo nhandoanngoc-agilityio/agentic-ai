@@ -1,4 +1,5 @@
-"""Retention: drop audit lines and checkpoint threads older than the cutoff.
+"""Retention: drop audit lines, checkpoint threads and remembered reviewer
+notes older than the cutoff.
 
 Harvest first: failures in the window about to be deleted become regression
 candidates before their evidence goes (candidates keep their own copy).
@@ -20,6 +21,7 @@ from market_research_team.config import settings
 from market_research_team.feedback.candidates import CandidateQueue
 from market_research_team.feedback.harvest import harvest
 from market_research_team.feedback.signals import parse_ts
+from market_research_team.memory import prune_memory
 
 
 @dataclass
@@ -30,6 +32,7 @@ class PruneReport:
     threads_deleted: int = 0
     paused_threads_deleted: int = 0
     candidates_harvested: int = 0
+    memory_notes_removed: int = 0
 
 
 def _is_old(line: str, cutoff: datetime) -> bool:
@@ -92,6 +95,7 @@ def prune(
     audit_path: Path | None = None,
     saver: Any | None = None,
     queue: CandidateQueue | None = None,
+    store: Any | None = None,
 ) -> PruneReport:
     audit_path = audit_path or settings.audit_log_path
     queue = queue or CandidateQueue(settings.candidates_dir)
@@ -112,6 +116,11 @@ def prune(
     report.threads_deleted, report.paused_threads_deleted = prune_checkpoints(
         saver, cutoff, apply=apply
     )
+    if store is None:
+        from market_research_team.checkpointing.store import get_memory_store
+
+        store = get_memory_store()
+    report.memory_notes_removed = prune_memory(store, cutoff, apply=apply)
     return report
 
 
@@ -145,10 +154,11 @@ def maybe_auto_prune(
         return None
     logger.info(
         "Auto-prune: %d audit lines removed, %d threads deleted (%d paused), "
-        "%d candidates harvested",
+        "%d reviewer notes removed, %d candidates harvested",
         report.audit_removed,
         report.threads_deleted,
         report.paused_threads_deleted,
+        report.memory_notes_removed,
         report.candidates_harvested,
     )
     return report

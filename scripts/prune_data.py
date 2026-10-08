@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         f"  checkpoint threads: {report.threads_deleted} deleted "
         f"({report.paused_threads_deleted} were paused awaiting approval)"
     )
+    print(f"  remembered reviewer notes: {report.memory_notes_removed} removed")
     if report.applied:
         print(f"  failures harvested first: {report.candidates_harvested}")
     return 0

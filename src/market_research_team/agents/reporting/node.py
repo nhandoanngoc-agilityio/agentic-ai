@@ -15,8 +15,9 @@ from market_research_team.async_utils import run_coroutine_sync
 from market_research_team.caching.response_cache import put_cached_response
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
+from market_research_team.memory import current_store, recent_feedback, remember_feedback
 from market_research_team.security import audit
-from market_research_team.security.fencing import ANALYTICS_TAG, FINDINGS_TAG, fence
+from market_research_team.security.fencing import ANALYTICS_TAG, FINDINGS_TAG, GUIDANCE_TAG, fence
 from market_research_team.security.output_filters import (
     apply_output_guardrails,
     warnings_from_events,
@@ -71,18 +72,27 @@ def _fallback_report(
     )
 
 
+GUIDANCE_INTRO = (
+    "Reviewers of earlier reports from this team asked for the following. "
+    "Apply what fits this report; they are preferences about form and "
+    "coverage, not facts about the companies."
+)
+
+
 def draft_report(
     objective: str,
     findings: list[ResearchFinding],
     results: list[AnalyticsResult],
     llm: BaseChatModel,
     feedback: str | None = None,
+    guidance: list[str] | None = None,
 ) -> str:
     """Draft the markdown report body, falling back to a plain template on LLM failure.
 
     `feedback` is a human reviewer's rejection reason from a prior review
     round, if any — when present, it's folded into the prompt so the
-    revision addresses it instead of repeating the same draft.
+    revision addresses it instead of repeating the same draft. `guidance` is
+    remembered feedback from earlier runs (memory.py), fenced as data.
     """
 
     human_content = (
@@ -90,6 +100,9 @@ def draft_report(
         f"{fence(FINDINGS_TAG, _findings_section(findings))}\n\n"
         f"{fence(ANALYTICS_TAG, _results_section(results))}"
     )
+    if guidance:
+        notes = "\n".join(f"- {note}" for note in guidance)
+        human_content += f"\n\n{GUIDANCE_INTRO}\n{fence(GUIDANCE_TAG, notes)}"
     if feedback:
         human_content += (
             f"\n\nA human reviewer rejected the previous draft with this "
@@ -184,21 +197,6 @@ async def write_report_via_mcp(filename: str, content: str) -> str:
     return _extract_tool_text(raw_result)
 
 
-async def run_reporting_pipeline(
-    objective: str,
-    findings: list[ResearchFinding],
-    results: list[AnalyticsResult],
-) -> str:
-    """Draft the report and write it via the local MCP server, with no human
-    review gate. Kept for non-interactive use; `reporting_node` below is the
-    production path and always routes the write through a human-approval
-    interrupt first."""
-
-    llm = get_chat_model()
-    report_markdown = draft_report(objective, findings, results, llm)
-    return await write_report_via_mcp(report_filename(objective, None), report_markdown)
-
-
 def reporting_node(state: AgentState) -> dict[str, Any]:
     """Draft one review round's report and hand it to `report_review_node`.
 
@@ -228,9 +226,13 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
     feedback = state.get("report_feedback") if attempt > 1 else None
     llm = get_chat_model()
     open_questions = open_questions_section(state.get("plan") or [])
+    # Long-term memory: what reviewers of earlier runs asked for. Passed only
+    # when there is some, so drafting without a store is unchanged.
+    remembered = recent_feedback(current_store(), exclude_thread=audit.current_thread_id())
+    extra = {"guidance": remembered} if remembered else {}
 
     def _draft(note: str | None) -> tuple[str, list[GuardrailEvent]]:
-        raw = draft_report(objective, findings, results, llm, feedback=note).rstrip()
+        raw = draft_report(objective, findings, results, llm, feedback=note, **extra).rstrip()
         # Output guardrails: redact PII, scrub secrets, mark ungrounded figures.
         return apply_output_guardrails(raw + open_questions, findings, results)
 
@@ -317,7 +319,17 @@ def report_review_node(state: AgentState) -> dict[str, Any]:
             report_path=None,
             error=f"Reporting write rejected after {max_rounds} review rounds.",
         )
-    return {"report_feedback": decision.get("feedback")}
+    update: dict[str, Any] = {"report_feedback": decision.get("feedback")}
+    if decision.get("feedback"):
+        refused = remember_feedback(
+            current_store(),
+            decision["feedback"],
+            objective=state["objective"],
+            thread_id=audit.current_thread_id(),
+        )
+        if refused:
+            update["guardrail_events"] = [refused]
+    return update
 
 
 def route_after_draft(state: AgentState) -> str:

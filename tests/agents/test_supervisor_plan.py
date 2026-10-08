@@ -315,3 +315,57 @@ def test_run_finished_records_the_run_s_model_usage(monkeypatch: pytest.MonkeyPa
         900,
         90,
     )
+
+
+# --- token budget ------------------------------------------------------------------
+
+
+def _spent(monkeypatch: pytest.MonkeyPatch, tokens: int) -> None:
+    monkeypatch.setattr(router_module.audit, "current_thread_id", lambda: "run-budget")
+    monkeypatch.setattr(
+        router_module,
+        "run_usage_so_far",
+        lambda thread_id: {"model_calls": 3, "input_tokens": tokens, "output_tokens": 0},
+    )
+
+
+def test_a_run_over_its_token_budget_goes_straight_to_reporting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_research_team.config import RunPolicy, settings
+
+    monkeypatch.setattr(settings, "run_policy", RunPolicy(max_run_tokens=1000))
+    _spent(monkeypatch, 1200)
+
+    route = decide_route(_state(_plan("open", "open")), _DecisionLLM(next="research"))  # type: ignore[arg-type]
+
+    assert (route.next, route.decided_by) == ("reporting", "rule")
+    assert route.rationale.startswith("token budget reached (1,200 of 1,000)")
+    assert route.guardrail is not None and route.guardrail["rule"] == "token_budget_reached"
+
+
+def test_under_budget_or_without_one_the_run_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    from market_research_team.config import RunPolicy, settings
+
+    _spent(monkeypatch, 999)
+    monkeypatch.setattr(settings, "run_policy", RunPolicy(max_run_tokens=1000))
+    under = decide_route(_state(_plan("open")), _DecisionLLM(next="research"))  # type: ignore[arg-type]
+    _spent(monkeypatch, 10**9)
+    monkeypatch.setattr(settings, "run_policy", RunPolicy(max_run_tokens=0))
+    disabled = decide_route(_state(_plan("open")), _DecisionLLM(next="research"))  # type: ignore[arg-type]
+
+    assert under.next == "research" and under.guardrail is None
+    assert disabled.next == "research"
+
+
+def test_the_budget_stop_is_recorded_as_a_guardrail_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    event = {"layer": "policy", "rule": "token_budget_reached", "detail": "x"}
+    monkeypatch.setattr(
+        router_module,
+        "run_supervisor_decision",
+        lambda state: router_module.SupervisorRoute("reporting", guardrail=event),  # type: ignore[arg-type]
+    )
+
+    update = router_module.supervisor_node(_state(_plan("open")))
+
+    assert update["guardrail_events"] == [event]

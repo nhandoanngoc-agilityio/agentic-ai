@@ -32,13 +32,23 @@ def test_disabled_returns_state_unchanged(monkeypatch: pytest.MonkeyPatch) -> No
     assert result is state
 
 
-def test_command_resume_is_left_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("resume_input", [Command(resume={"approved": True}), None])
+def test_a_resume_or_retry_never_consults_the_cache(
+    monkeypatch: pytest.MonkeyPatch, resume_input: object
+) -> None:
+    def _must_not_be_called(_state: object) -> None:
+        raise AssertionError("the response cache is for fresh runs only")
+
+    seen: list[object] = []
     monkeypatch.setattr(settings, "response_cache_enabled", True)
+    monkeypatch.setattr(graph_module, "_apply_response_cache", _must_not_be_called)
+    monkeypatch.setattr(
+        graph_module, "_execute", lambda graph, state, config, on_step: seen.append(state) or {}
+    )
 
-    command = Command(resume={"approved": True})
-    result = graph_module._apply_response_cache(command)
+    graph_module.run_graph(resume_input, compiled_graph=object())  # type: ignore[arg-type]
 
-    assert result is command
+    assert seen == [resume_input]
 
 
 def test_cache_hit_populates_findings_and_results(monkeypatch: pytest.MonkeyPatch) -> None:

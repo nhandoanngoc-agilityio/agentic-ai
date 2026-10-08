@@ -66,7 +66,10 @@ unexpected failure is recorded into state, labelled with its exception type and
 whether it was transient (timeout, rate limit, connection), and ends the run
 cleanly instead of crashing. Model calls have a timeout and SDK-level retries;
 the MCP write has a timeout. The safe entrypoint (`run_graph` in `graph.py`)
-also bounds recursion and catches `GraphRecursionError`, including on a resume.
+also bounds recursion and catches `GraphRecursionError`, including on a resume. A run that
+failed on one step can be retried from its checkpoint (`run_graph_cli.py --retry <thread-id>`,
+`graph.retry_failed_run`): only the failed step re-runs, and plan, findings, analytics and any
+draft awaiting its write are kept.
 
 ### How the agent decides
 
@@ -78,8 +81,10 @@ also bounds recursion and catches `GraphRecursionError`, including on a resume.
 | Which sub-question to research next | The model (`focus_id`), defaulting to the first open item |
 | A sub-question is unanswerable | Code: a targeted pass added nothing |
 | End on error or discard, first research pass, visit cap, finish after the write | Code rules |
+| Stop gathering when the run's token budget is spent, and report what it has | Code rule (`RunPolicy.max_run_tokens`) |
 | Which math tool, with which inputs | The model (Analytics), inputs checked against the findings |
 | Whether the report is written | A person (approval interrupt) |
+| What earlier reviewers asked for, carried into new drafts | Long-term memory (`memory.py`, LangGraph store): reviewer feedback from past runs, sanitized when stored |
 
 Each supervisor decision is logged as a `route_decision` audit event with
 `decided_by` (`rule`, `llm` or `fallback`) and a rationale, and shown in the run's
@@ -572,7 +577,7 @@ and can be overridden via `.env` or real environment variables. From
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` | unset | Pinned sampling parameters (provider default when unset); part of the agent version |
 | `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `60` / `2` | Per-call deadline and SDK retries (rate limits, 5xx, connection errors); part of the agent version |
 | `MCP_WRITE_TIMEOUT_SECONDS` | `30` | Deadline for one MCP report write, including spawning the server |
-| `RUN_POLICY__MAX_ROUTING_VISITS`, `__MAX_PLAN_ITEMS`, `__MAX_TOOL_ITERATIONS`, `__MAX_FINDINGS`, `__MAX_REVIEW_ROUNDS`, `__MAX_SELF_CHECK_REDRAFTS` | `8`, `4`, `4`, `10`, `3`, `1` | Run limits, all in `RunPolicy` (`config.py`); part of the agent version |
+| `RUN_POLICY__MAX_ROUTING_VISITS`, `__MAX_PLAN_ITEMS`, `__MAX_TOOL_ITERATIONS`, `__MAX_FINDINGS`, `__MAX_REVIEW_ROUNDS`, `__MAX_SELF_CHECK_REDRAFTS`, `__MAX_RUN_TOKENS`, `__MAX_REVIEWER_NOTES` | `8`, `4`, `4`, `10`, `3`, `1`, `50000`, `5` | Run limits, all in `RunPolicy` (`config.py`); part of the agent version |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | unset | Optional Langfuse tracing; a no-op unless both keys are set |
 
 Other tunables (`anthropic_model` / `openai_model` names, defaults `claude-sonnet-5-5` /

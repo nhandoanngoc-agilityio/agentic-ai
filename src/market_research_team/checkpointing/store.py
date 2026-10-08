@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 
 from market_research_team.config import settings
 
@@ -109,3 +110,74 @@ def _build_postgres_checkpointer(
         pool.close()
         raise
     return checkpointer, pool.close
+
+
+# Long-term memory store (see memory.py), one per process like the
+# checkpointer, closed at exit.
+_current_store: tuple[str, BaseStore, Callable[[], None]] | None = None
+_store_atexit_registered = False
+
+
+def get_memory_store() -> BaseStore:
+    """The process-wide long-term memory store: Postgres when
+    `settings.database_url` is set, else a local SQLite file."""
+
+    global _current_store, _store_atexit_registered
+    key = settings.database_url or f"sqlite:{settings.memory_db_path}"
+    with _lock:
+        if _current_store is not None and _current_store[0] == key:
+            return _current_store[1]
+        _close_current_store()
+        if settings.database_url:
+            store, close = _build_postgres_store(settings.database_url)
+        else:
+            store, close = _build_sqlite_store(settings.memory_db_path)
+        _current_store = (key, store, close)
+        if not _store_atexit_registered:
+            atexit.register(close_memory_store)
+            _store_atexit_registered = True
+        return store
+
+
+def close_memory_store() -> None:
+    with _lock:
+        _close_current_store()
+
+
+def _close_current_store() -> None:
+    global _current_store
+    if _current_store is not None:
+        _, _, close = _current_store
+        _current_store = None
+        close()
+
+
+def _build_sqlite_store(db_path: Path) -> tuple[BaseStore, Callable[[], None]]:
+    from langgraph.store.sqlite import SqliteStore
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    store = SqliteStore(conn)
+    store.setup()
+    return store, conn.close
+
+
+def _build_postgres_store(database_url: str) -> tuple[BaseStore, Callable[[], None]]:
+    from langgraph.store.postgres import PostgresStore
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    pool = ConnectionPool(
+        database_url,
+        min_size=_POSTGRES_POOL_MIN_SIZE,
+        max_size=_POSTGRES_POOL_MAX_SIZE,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        open=True,
+    )
+    try:
+        store = PostgresStore(pool)  # type: ignore[arg-type]
+        store.setup()
+    except Exception:
+        pool.close()
+        raise
+    return store, pool.close
