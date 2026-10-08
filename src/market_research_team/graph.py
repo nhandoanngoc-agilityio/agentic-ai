@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from market_research_team.agents.analytics.node import analytics_node
+from market_research_team.agents.planner.node import planner_node
 from market_research_team.agents.reporting.node import (
     report_review_node,
     reporting_node,
@@ -24,7 +25,11 @@ from market_research_team.caching.response_cache import get_cached_response
 from market_research_team.config import settings
 from market_research_team.guardrails import with_error_boundary
 from market_research_team.observability import flush as flush_traces
-from market_research_team.observability import get_langfuse_handler, tracing_enabled
+from market_research_team.observability import (
+    get_langfuse_handler,
+    take_run_usage,
+    tracing_enabled,
+)
 from market_research_team.security import audit
 from market_research_team.security.input_guard import input_guard_node
 from market_research_team.security.input_validation import validate_objective
@@ -58,8 +63,14 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
         with_error_boundary("input_guard", input_guard_node, fallback_updates={"next": "FINISH"}),
     )
 
+    # The planner decomposes the objective into sub-questions once, before the
+    # supervisor's first decision; a planning failure falls back to a
+    # one-item plan inside the node, so it never ends the run.
+    builder.add_node("planner", with_error_boundary("planner", planner_node))
+
     builder.add_edge(START, "input_guard")
-    builder.add_edge("input_guard", "supervisor")
+    builder.add_edge("input_guard", "planner")
+    builder.add_edge("planner", "supervisor")
     builder.add_conditional_edges(
         "supervisor",
         route_from_supervisor,
@@ -189,9 +200,12 @@ def run_graph(
         else:
             result = _execute(target_graph, initial_state, config, on_step)
     except GraphRecursionError as exc:
+        take_run_usage(thread_id)  # the run ended without a run_finished record
         _record_run_latency(thread_id, objective, start, "recursion_limit")
-        return {**initial_state, "error": f"Recursion limit reached: {exc}"}
+        state = _state_at_failure(target_graph, initial_state, config)
+        return cast(AgentState, {**state, "error": f"Recursion limit reached: {exc}"})
     except Exception:
+        take_run_usage(thread_id)
         _record_run_latency(thread_id, objective, start, "exception")
         raise
     finally:
@@ -200,6 +214,24 @@ def run_graph(
     outcome = "interrupted" if result.get("__interrupt__") else "finished"
     _record_run_latency(thread_id, objective, start, outcome)
     return cast(AgentState, result)
+
+
+def _state_at_failure(
+    target_graph: Any, initial_state: AgentState | Command[Any], config: RunnableConfig
+) -> dict[str, Any]:
+    """The state to report a failed invocation with.
+
+    A fresh run reports its input. A resume (`Command`) has no state of its
+    own, so it reports the thread's last checkpoint, or `{}` when there is
+    no checkpointer to read.
+    """
+
+    if isinstance(initial_state, dict):
+        return dict(initial_state)
+    try:
+        return dict(target_graph.get_state(config).values)  # type: ignore[reportUnknownMemberType]
+    except Exception:
+        return {}
 
 
 def _execute(

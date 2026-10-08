@@ -12,21 +12,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from market_research_team import graph as graph_module
-from market_research_team.state import AgentState
+from market_research_team.state import AgentState, new_run_state
 
-# A reviewer can reject up to `_MAX_REVIEW_ROUNDS` (3) drafts; never loop forever.
+# A reviewer can reject up to `RunPolicy.max_review_rounds` (3) drafts; never loop forever.
 MAX_APPROVAL_ROUNDS = 3
-
-
-def pipeline_state(objective: str) -> AgentState:
-    return {
-        "messages": [],
-        "objective": objective,
-        "next": "research",
-        "research_findings": [],
-        "analytics_results": [],
-        "report_path": None,
-    }
 
 
 @dataclass
@@ -52,7 +41,7 @@ def run_graph_with_outcome(
 
     compiled = graph_module.build_production_graph(InMemorySaver())
     state = graph_module.run_graph(
-        pipeline_state(objective), compiled_graph=compiled, thread_id=thread_id
+        new_run_state(objective), compiled_graph=compiled, thread_id=thread_id
     )
     wrote_before_approval = bool(state.get("report_path"))
     rounds = 0

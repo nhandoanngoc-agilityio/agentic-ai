@@ -6,32 +6,35 @@ from langchain_core.tools import tool
 
 
 @tool
-def mean(values: list[float], entity: str | None = None) -> float:
+def mean(values: list[float], entity: str | None = None, label: str | None = None) -> float:
     """Compute the arithmetic mean of a list of numbers.
 
     `entity` optionally names which compared subject (e.g. a company) this
-    calculation is about; it does not affect the computed value.
+    calculation is about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     return statistics.fmean(values)
 
 
 @tool
-def median(values: list[float], entity: str | None = None) -> float:
+def median(values: list[float], entity: str | None = None, label: str | None = None) -> float:
     """Compute the median of a list of numbers.
 
     `entity` optionally names which compared subject this calculation is
-    about; it does not affect the computed value.
+    about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     return statistics.median(values)
 
 
 @tool
-def stdev(values: list[float], entity: str | None = None) -> float:
+def stdev(values: list[float], entity: str | None = None, label: str | None = None) -> float:
     """Compute the sample standard deviation of a list of numbers.
 
     Returns 0.0 for fewer than two values, since sample standard deviation
     is undefined below that. `entity` optionally names which compared
-    subject this calculation is about; it does not affect the value.
+    subject this calculation is about; it does not affect the value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     if len(values) < 2:
         return 0.0
@@ -39,43 +42,49 @@ def stdev(values: list[float], entity: str | None = None) -> float:
 
 
 @tool
-def minimum(values: list[float], entity: str | None = None) -> float:
+def minimum(values: list[float], entity: str | None = None, label: str | None = None) -> float:
     """Return the smallest value in a list of numbers.
 
     `entity` optionally names which compared subject this calculation is
-    about; it does not affect the computed value.
+    about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     return min(values)
 
 
 @tool
-def maximum(values: list[float], entity: str | None = None) -> float:
+def maximum(values: list[float], entity: str | None = None, label: str | None = None) -> float:
     """Return the largest value in a list of numbers.
 
     `entity` optionally names which compared subject this calculation is
-    about; it does not affect the computed value.
+    about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     return max(values)
 
 
 @tool
-def value_range(values: list[float], entity: str | None = None) -> float:
+def value_range(values: list[float], entity: str | None = None, label: str | None = None) -> float:
     """Return the difference between the largest and smallest value.
 
     `entity` optionally names which compared subject this calculation is
-    about; it does not affect the computed value.
+    about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     return max(values) - min(values)
 
 
 @tool
-def percent_change(old_value: float, new_value: float, entity: str | None = None) -> float:
+def percent_change(
+    old_value: float, new_value: float, entity: str | None = None, label: str | None = None
+) -> float:
     """Compute the percentage change from old_value to new_value.
 
     Raises an error when old_value is 0, since the change is undefined.
 
     `entity` optionally names which compared subject this calculation is
-    about; it does not affect the computed value.
+    about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     if old_value == 0:
         raise ValueError("old_value must be non-zero to compute a percent change.")
@@ -84,14 +93,19 @@ def percent_change(old_value: float, new_value: float, entity: str | None = None
 
 @tool
 def compound_growth_rate(
-    start_value: float, end_value: float, periods: float, entity: str | None = None
+    start_value: float,
+    end_value: float,
+    periods: float,
+    entity: str | None = None,
+    label: str | None = None,
 ) -> float:
     """Compute the compound growth rate, as a percentage, over a number of periods.
 
     Raises an error unless start_value and periods are both positive.
 
     `entity` optionally names which compared subject this calculation is
-    about; it does not affect the computed value.
+    about; it does not affect the computed value. `label` optionally names what
+    this computes for the report (e.g. "Globex ACV range").
     """
     if start_value <= 0 or periods <= 0:
         raise ValueError("start_value and periods must both be positive.")

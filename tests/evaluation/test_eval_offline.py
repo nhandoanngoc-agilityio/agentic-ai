@@ -6,6 +6,7 @@ is for.
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -133,12 +134,62 @@ def test_evaluate_retrieval_fails_when_expected_source_missing(
     assert all(not result.passed for result in results)
 
 
-def test_evaluate_supervisor_decision_passes_on_allowed_choice() -> None:
-    llm = _FakeSupervisorLLM("analytics")
+class _Coverage:
+    def __init__(self, item_id: str, status: str, *sources: str) -> None:
+        self.id, self.status, self.sources = item_id, status, list(sources)
 
+
+def _supervisor_answering(next_step: str, focus_id: str | None = None) -> object:
+    """A supervisor model that judges the pricing plan correctly (Acme from
+    competitor_acme.md, Globex from competitor_globex.md when present) and
+    answers `next_step`."""
+
+    class _LLM:
+        def with_structured_output(self, _schema: object) -> object:
+            return self
+
+        def invoke(self, messages: list[Any], config: object = None) -> _FakeStructuredResult:
+            context = messages[1].content
+            coverage = [_Coverage("q1", "answered", "competitor_acme.md")]
+            if "competitor_globex.md" in context:
+                coverage.append(_Coverage("q2", "answered", "competitor_globex.md"))
+            return _FakeStructuredResult(
+                next=next_step, focus_id=focus_id, rationale="r", coverage=coverage
+            )
+
+    return _LLM()
+
+
+def _supervisor_results(llm: object) -> dict[str, bool]:
     results = evaluate_supervisor_decision(llm, "fake-provider")  # type: ignore[arg-type]
+    return {result.case_name: result.passed for result in results}
 
-    assert all(result.passed for result in results)
+
+def test_supervisor_cases_have_one_right_answer() -> None:
+    """Before, every allowed choice passed, so no supervisor case could fail."""
+
+    # On the covered plan a "research" answer is overridden by rule (nothing
+    # left to research) and reaches reporting, so both cases pass.
+    assert _supervisor_results(_supervisor_answering("research", "q2")) == {
+        "acme_covered_globex_missing": True,
+        "plan_covered_analysis_done": True,
+    }
+    assert _supervisor_results(_supervisor_answering("reporting")) == {
+        "acme_covered_globex_missing": False,
+        "plan_covered_analysis_done": True,
+    }
+    assert not any(_supervisor_results(_FakeSupervisorLLM("analytics")).values())
+
+
+def test_a_hand_back_must_target_the_gap_not_just_choose_research() -> None:
+    """Without judging q1 answered, the hand-back defaults to q1 (Acme), which
+    is not the gap: the case fails on its focus."""
+
+    results = evaluate_supervisor_decision(_FakeSupervisorLLM("research"), "fake-provider")  # type: ignore[arg-type]
+
+    (gap_case,) = [r for r in results if r.case_name == "acme_covered_globex_missing"]
+    assert not gap_case.passed
+    assert "focus missing ['globex']" in gap_case.detail
 
 
 def test_evaluate_analytics_passes_when_grounded_value_computed() -> None:
@@ -283,6 +334,7 @@ def test_run_all_includes_safety_and_passes_repeat(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(offline_eval, "get_chat_model", lambda: object())
     for name in (
         "evaluate_query_rewriter",
+        "evaluate_planner",
         "evaluate_retrieval",
         "evaluate_supervisor_decision",
         "evaluate_analytics",
@@ -299,6 +351,7 @@ def test_run_all_includes_safety_and_passes_repeat(monkeypatch: pytest.MonkeyPat
     assert calls["evaluate_reporting"] == {"judge_llm": "J", "repeat": 2}
     assert calls["evaluate_retrieval"] == {"repeat": 2}
     assert calls["evaluate_regressions"] == {"repeat": 2}
+    assert calls["evaluate_planner"] == {"repeat": 2}
 
 
 class _FakeJudge:
@@ -393,3 +446,64 @@ def test_judge_error_is_recorded_in_the_detail() -> None:
     )
 
     assert all("judge_error=RuntimeError: no API key for judge" in r.detail for r in results)
+
+
+class _FakePlanLLM:
+    def __init__(self, questions: list[str]) -> None:
+        self._questions = questions
+
+    def with_structured_output(self, _schema: object) -> _FakeStructuredLLM:
+        return _FakeStructuredLLM(_FakeStructuredResult(questions=self._questions))
+
+
+def test_evaluate_planner_passes_a_per_company_plan_and_fails_a_restated_one() -> None:
+    from market_research_team.evaluation.offline_eval import evaluate_planner
+
+    per_company = _FakePlanLLM(["What does Acme charge per seat?", "What is Globex's ACV?"])
+    good = evaluate_planner(per_company, "p")  # type: ignore[arg-type]
+    restated = evaluate_planner(
+        _FakePlanLLM(["How do Acme and Globex prices compare?", "Who are Acme's customers?"]),  # type: ignore[arg-type]
+        "p",
+    )
+
+    assert [r.category for r in good] == ["planning"]
+    assert good[0].passed
+    assert not restated[0].passed
+
+
+def test_reporting_case_with_feedback_requires_a_table() -> None:
+    text = "# Objective\nx\n# Findings\nAcme $49, Globex $150K.\n# Analysis\ny"
+
+    without = {r.case_name: r for r in evaluate_reporting(_FakeReportingLLM(text), "p")}  # type: ignore[arg-type]
+    table = text + "\n\n| Vendor | Price |\n|---|---|\n| Acme | $49 |"
+    with_table = {r.case_name: r for r in evaluate_reporting(_FakeReportingLLM(table), "p")}  # type: ignore[arg-type]
+
+    assert not without["reviewer_feedback_adds_table"].passed
+    assert "no markdown table" in without["reviewer_feedback_adds_table"].detail
+    assert with_table["reviewer_feedback_adds_table"].passed
+
+
+def test_evaluate_full_pipeline_adds_a_trajectory_result_from_the_audit_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from market_research_team.security import audit
+
+    def _fake_run_graph(state: AgentState, *, thread_id: str, **_kwargs: object) -> AgentState:
+        route = [("research", "rule"), ("reporting", "llm"), ("FINISH", "rule")]
+        for next_step, decided_by in route:
+            audit.record("route_decision", thread_id, next=next_step, decided_by=decided_by)
+        audit.record("route_decision", "another-thread", next="research", decided_by="fallback")
+        return {
+            **state,
+            "plan": [{"id": "q1", "question": "Q?", "status": "answered", "sources": ["x"]}],
+            "report_path": "reports/mock.md",
+            "error": None,
+        }
+
+    monkeypatch.setattr(graph_module, "run_graph", _fake_run_graph)
+
+    results = evaluate_full_pipeline("fake-provider")
+
+    (trajectory,) = [r for r in results if r.category == "trajectory"]
+    assert trajectory.passed, trajectory.detail
+    assert "research(rule) -> reporting(llm) -> FINISH(rule)" in trajectory.detail

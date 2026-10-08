@@ -45,3 +45,47 @@ def test_cli_records_a_rejected_objective_for_the_harvester(tmp_path: Path) -> N
     (event,) = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert event["event"] == "run_finished"
     assert event["guardrail_events"][0]["layer"] == "input"
+
+
+def test_cli_refuses_a_thread_id_that_already_has_a_run(tmp_path: Path) -> None:
+    """Reusing a thread would mix a fresh run with the old run's accumulated
+    state (guardrail events, messages, flags), so the CLI refuses it."""
+
+    import sqlite3
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from market_research_team.graph import build_production_graph
+
+    db = tmp_path / "checkpoints.sqlite"
+    conn = sqlite3.connect(str(db))
+    graph = build_production_graph(SqliteSaver(conn))
+    config = {"configurable": {"thread_id": "used-thread"}}
+    graph.update_state(config, {"objective": "Earlier run"}, as_node="input_guard")  # type: ignore[arg-type]
+    conn.close()
+
+    env = {
+        **os.environ,
+        "AUDIT_LOG_PATH": str(tmp_path / "audit.jsonl"),
+        "CHECKPOINT_DB_PATH": str(db),
+        "AUTO_PRUNE_ENABLED": "false",
+        # Environment beats `.env` in pydantic-settings: an empty URL forces
+        # SQLite even when the developer's `.env` points at Postgres.
+        "DATABASE_URL": "",
+        # Safety net: if the refusal ever regresses, the run fails on auth
+        # instead of spending money on a real model.
+        "ANTHROPIC_API_KEY": "invalid",
+        "OPENAI_API_KEY": "invalid",
+        "LANGFUSE_PUBLIC_KEY": "",
+        "LANGFUSE_SECRET_KEY": "",
+    }
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), "Assess Acme pricing", "--thread-id", "used-thread"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+    assert result.returncode == 2
+    assert "already has a run" in result.stderr

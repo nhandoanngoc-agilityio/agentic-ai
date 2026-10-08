@@ -3,6 +3,8 @@ LangSmith calls. A fake Client double stands in for langsmith.Client so
 sync_dataset's get-or-create-and-wipe logic is exercised deterministically.
 """
 
+from typing import Any
+
 import pytest
 
 from market_research_team.evaluation import langsmith_eval
@@ -175,14 +177,48 @@ def test_supervisor_decision_examples_match_golden_dataset() -> None:
     )
 
 
-def test_target_supervisor_decision_calls_decide_next_step(monkeypatch) -> None:
-    monkeypatch.setattr(langsmith_eval, "decide_next_step", lambda state, llm: "analytics")
+def test_target_supervisor_decision_calls_decide_route_with_the_plan(monkeypatch) -> None:
+    from market_research_team.agents.supervisor.router import SupervisorRoute
+
+    seen: dict[str, Any] = {}
+
+    def _decide(state, llm):
+        seen.update(state)
+        return SupervisorRoute("research", "Globex ACV?", "gap", "llm", focus_id="q2")
+
+    monkeypatch.setattr(langsmith_eval, "decide_route", _decide)
+    plan = [{"id": "q2", "question": "Globex ACV?", "status": "open", "sources": []}]
 
     result = langsmith_eval.target_supervisor_decision(
-        {"research_findings": [], "analytics_results": [], "report_path": None}, llm=object()
+        {
+            "objective": "Compare",
+            "plan": plan,
+            "research_findings": [],
+            "analytics_results": [],
+            "report_path": None,
+        },
+        llm=object(),  # type: ignore[arg-type]
     )
 
-    assert result == {"decision": "analytics"}
+    assert result == {
+        "decision": "research",
+        "focus": "Globex ACV?",
+        "rationale": "gap",
+        "decided_by": "llm",
+    }
+    assert seen["plan"] == plan and seen["objective"] == "Compare"
+
+
+def test_deterministic_evaluator_supervisor_decision_checks_the_focus() -> None:
+    run = _FakeRun(outputs={"decision": "research", "focus": "Acme seat price"})
+    example = _FakeExample(
+        outputs={"allowed_decisions": ["research"], "focus_keywords": ["globex"]}
+    )
+
+    result = langsmith_eval.deterministic_evaluator_supervisor_decision(run, example)  # type: ignore[arg-type]
+
+    assert result["score"] == 0.0
+    assert "focus missing ['globex']" in result["comment"]
 
 
 def test_deterministic_evaluator_supervisor_decision_passes_on_allowed_choice() -> None:
@@ -285,15 +321,21 @@ def test_reporting_examples_match_golden_dataset() -> None:
 
 
 def test_target_reporting_calls_draft_report(monkeypatch) -> None:
-    monkeypatch.setattr(
-        langsmith_eval, "draft_report", lambda objective, findings, results, llm: "# Report body"
-    )
+    seen: dict[str, Any] = {}
+
+    def _draft(objective, findings, results, llm, feedback=None):
+        seen["feedback"] = feedback
+        return "# Report body"
+
+    monkeypatch.setattr(langsmith_eval, "draft_report", _draft)
 
     result = langsmith_eval.target_reporting(
-        {"objective": "x", "findings": [], "results": []}, llm=object()
+        {"objective": "x", "findings": [], "results": [], "feedback": "Add a table."},
+        llm=object(),  # type: ignore[arg-type]
     )
 
     assert result == {"report": "# Report body"}
+    assert seen["feedback"] == "Add a table."
 
 
 def test_deterministic_evaluator_reporting_passes_when_facts_and_sections_present() -> None:

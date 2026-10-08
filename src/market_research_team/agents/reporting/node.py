@@ -1,6 +1,9 @@
 """Reporting Agent node: drafts a markdown report and writes it via the
 local MCP filesystem server."""
 
+import asyncio
+import hashlib
+import uuid
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -13,21 +16,18 @@ from market_research_team.caching.response_cache import put_cached_response
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
 from market_research_team.security import audit
+from market_research_team.security.fencing import ANALYTICS_TAG, FINDINGS_TAG, fence
 from market_research_team.security.output_filters import (
     apply_output_guardrails,
     warnings_from_events,
 )
-from market_research_team.state import AgentState, AnalyticsResult, ResearchFinding
-
-# Caps the human-review loop in `reporting_node` below, mirroring the
-# supervisor's `_MAX_ROUTING_VISITS` guard against an endless back-and-forth.
-_MAX_REVIEW_ROUNDS = 3
-
-# Delimiter tags used to fence untrusted retrieved content in `draft_report`'s
-# prompt. Module-level so `_escape_closing_tags` and `human_content` share the
-# exact same literals.
-_FINDINGS_TAG = "retrieved_research_data"
-_ANALYTICS_TAG = "computed_analytics"
+from market_research_team.state import (
+    AgentState,
+    AnalyticsResult,
+    GuardrailEvent,
+    PlanItem,
+    ResearchFinding,
+)
 
 SYSTEM_PROMPT = (
     "You write concise markdown research reports for a market and "
@@ -52,24 +52,9 @@ def _results_section(results: list[AnalyticsResult]) -> str:
     if not results:
         return "No analytics were computed."
     return "\n".join(
-        f"- {result['metric']}: {result['value']} ({result['detail']})" for result in results
+        f"- {result.get('label') or result['metric']}: {result['value']} ({result['detail']})"
+        for result in results
     )
-
-
-def _escape_closing_tags(text: str) -> str:
-    """Neutralize literal closing-delimiter tags in untrusted text.
-
-    A poisoned corpus chunk containing the literal string
-    `</retrieved_research_data>` (or `</computed_analytics>`) would otherwise
-    close its enclosing block early in `draft_report`'s prompt, letting the
-    rest of the chunk land outside the tag as if it were operator text. This
-    is delimiter escaping only (backslash-escaping the closing bracket), not
-    keyword/content scanning for injection phrases.
-    """
-
-    for tag in (_FINDINGS_TAG, _ANALYTICS_TAG):
-        text = text.replace(f"</{tag}>", f"<\\/{tag}>")
-    return text
 
 
 def _fallback_report(
@@ -102,8 +87,8 @@ def draft_report(
 
     human_content = (
         f"Objective: {objective}\n\n"
-        f"<{_FINDINGS_TAG}>\n{_escape_closing_tags(_findings_section(findings))}\n</{_FINDINGS_TAG}>\n\n"
-        f"<{_ANALYTICS_TAG}>\n{_escape_closing_tags(_results_section(results))}\n</{_ANALYTICS_TAG}>"
+        f"{fence(FINDINGS_TAG, _findings_section(findings))}\n\n"
+        f"{fence(ANALYTICS_TAG, _results_section(results))}"
     )
     if feedback:
         human_content += (
@@ -132,11 +117,46 @@ def draft_report(
     return _fallback_report(objective, findings, results)
 
 
+def open_questions_section(plan: list[PlanItem]) -> str:
+    """Markdown naming the plan's sub-questions that research did not answer
+    (unanswerable from the knowledge base, or still open when the run moved
+    on), so the report states its gaps instead of glossing over them. Empty
+    when every item was answered."""
+
+    unresolved = [item for item in plan if item["status"] != "answered"]
+    if not unresolved:
+        return ""
+    lines = "\n".join(f"- {item['question']}" for item in unresolved)
+    return (
+        "\n\n## Open questions\n\n"
+        "The knowledge base did not answer these parts of the objective:\n\n"
+        f"{lines}\n"
+    )
+
+
 def _slugify(objective: str) -> str:
     slug = "".join(char.lower() if char.isalnum() else "-" for char in objective)
     while "--" in slug:
         slug = slug.replace("--", "-")
     return slug.strip("-")[:60] or "report"
+
+
+def report_filename(objective: str, thread_id: str | None) -> str:
+    """`<objective slug>-<run id>.md`.
+
+    The run id is a short hash of the thread id: two runs of the same
+    objective never share a file (one used to replace the other's approved
+    report), and it is stable within a run, so the filename the reviewer
+    approves is the one written even when the review is resumed later.
+    Without a thread there is nothing to resume, so a random id is used.
+    """
+
+    run_id = (
+        hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:8]
+        if thread_id
+        else uuid.uuid4().hex[:8]
+    )
+    return f"{_slugify(objective)}-{run_id}.md"
 
 
 def _extract_tool_text(result: object) -> str:
@@ -152,9 +172,15 @@ def _extract_tool_text(result: object) -> str:
 async def write_report_via_mcp(filename: str, content: str) -> str:
     """Write a drafted report to disk via the local MCP server. Returns the written path."""
 
-    tools = await load_reporting_tools()
-    write_tool = next(tool for tool in tools if tool.name == "write_report")
-    raw_result = await write_tool.ainvoke({"filename": filename, "content": content})
+    async def _write() -> object:
+        tools = await load_reporting_tools()
+        write_tool = next(tool for tool in tools if tool.name == "write_report")
+        return await write_tool.ainvoke({"filename": filename, "content": content})
+
+    # Bounded: spawning the server and the write together must not hang the
+    # review node (and the UI worker behind it). A timeout raises
+    # `TimeoutError`, which the error boundary records as transient.
+    raw_result = await asyncio.wait_for(_write(), timeout=settings.mcp_write_timeout_seconds)
     return _extract_tool_text(raw_result)
 
 
@@ -170,8 +196,7 @@ async def run_reporting_pipeline(
 
     llm = get_chat_model()
     report_markdown = draft_report(objective, findings, results, llm)
-    filename = f"{_slugify(objective)}.md"
-    return await write_report_via_mcp(filename, report_markdown)
+    return await write_report_via_mcp(report_filename(objective, None), report_markdown)
 
 
 def reporting_node(state: AgentState) -> dict[str, Any]:
@@ -201,11 +226,32 @@ def reporting_node(state: AgentState) -> dict[str, Any]:
         )
 
     feedback = state.get("report_feedback") if attempt > 1 else None
-    raw_draft = draft_report(objective, findings, results, get_chat_model(), feedback=feedback)
-    # Output guardrails: redact PII, scrub secrets, mark ungrounded figures.
-    # Nothing blocks -- the warnings travel with the interrupt so the human
-    # approves with eyes open.
-    report_markdown, events = apply_output_guardrails(raw_draft, findings, results)
+    llm = get_chat_model()
+    open_questions = open_questions_section(state.get("plan") or [])
+
+    def _draft(note: str | None) -> tuple[str, list[GuardrailEvent]]:
+        raw = draft_report(objective, findings, results, llm, feedback=note).rstrip()
+        # Output guardrails: redact PII, scrub secrets, mark ungrounded figures.
+        return apply_output_guardrails(raw + open_questions, findings, results)
+
+    report_markdown, events = _draft(feedback)
+    # Self-check: figures the output check can't trace to the evidence get one
+    # redraft before a human sees them. Nothing blocks either way -- whatever
+    # remains travels with the interrupt as warnings.
+    for _ in range(settings.run_policy.max_self_check_redrafts):
+        unverified = [event["detail"] for event in events if event["rule"] == "unverified_numbers"]
+        if not unverified:
+            break
+        note = (
+            f"An automatic check found {unverified[0]}. Use only figures stated in "
+            "the research data or the computed analytics, or remove them."
+        )
+        report_markdown, redraft_events = _draft(f"{feedback}\n{note}" if feedback else note)
+        events = [
+            *[event for event in events if event["rule"] != "unverified_numbers"],
+            {"layer": "policy", "rule": "self_check_redraft", "detail": unverified[0]},
+            *redraft_events,
+        ]
     return {
         "report_draft": report_markdown,
         "report_draft_warnings": warnings_from_events(events),
@@ -232,7 +278,7 @@ def report_review_node(state: AgentState) -> dict[str, Any]:
     Holds only the interrupt and the write, so replaying it on resume is
     cheap and deterministic. A rejection stores its feedback and routes back
     to `reporting_node` for a redraft; a reviewer who keeps rejecting for
-    `_MAX_REVIEW_ROUNDS` rounds ends the run without ever writing, the same
+    `RunPolicy.max_review_rounds` rounds ends the run without ever writing, the same
     way any other node failure does.
     """
 
@@ -240,7 +286,8 @@ def report_review_node(state: AgentState) -> dict[str, Any]:
     if not draft:
         raise ValueError("report_review reached without a draft to review.")
     attempt = state.get("report_review_round", 1)
-    filename = f"{_slugify(state['objective'])}.md"
+    filename = report_filename(state["objective"], audit.current_thread_id())
+    max_rounds = settings.run_policy.max_review_rounds
 
     decision = interrupt(
         {
@@ -248,7 +295,7 @@ def report_review_node(state: AgentState) -> dict[str, Any]:
             "filename": filename,
             "content": draft,
             "attempt": attempt,
-            "max_attempts": _MAX_REVIEW_ROUNDS,
+            "max_attempts": max_rounds,
             "warnings": state.get("report_draft_warnings", []),
         }
     )
@@ -264,11 +311,11 @@ def report_review_node(state: AgentState) -> dict[str, Any]:
             report_path=None,
             report_discarded=True,
         )
-    if attempt >= _MAX_REVIEW_ROUNDS:
+    if attempt >= max_rounds:
         return _review_concluded(
-            f"Report rejected after {_MAX_REVIEW_ROUNDS} review rounds; ending run.",
+            f"Report rejected after {max_rounds} review rounds; ending run.",
             report_path=None,
-            error=f"Reporting write rejected after {_MAX_REVIEW_ROUNDS} review rounds.",
+            error=f"Reporting write rejected after {max_rounds} review rounds.",
         )
     return {"report_feedback": decision.get("feedback")}
 

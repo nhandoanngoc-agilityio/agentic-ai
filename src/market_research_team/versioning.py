@@ -54,7 +54,7 @@ def git_sha() -> str:
     `.git`), then the local checkout, else `unknown`. Build provenance only --
     not part of the fingerprint, which tracks behaviour, not commits."""
 
-    for var in ("GIT_SHA", "CI_COMMIT_SHA"):
+    for var in ("GIT_SHA", "GITHUB_SHA", "CI_COMMIT_SHA"):
         if value := os.environ.get(var):
             return value[:_HASH_LENGTH]
     try:
@@ -72,11 +72,13 @@ def git_sha() -> str:
 
 def _instructions() -> dict[str, str]:
     from market_research_team.agents.analytics import node as analytics
+    from market_research_team.agents.planner import node as planner
     from market_research_team.agents.reporting import node as reporting
     from market_research_team.agents.supervisor import router
     from market_research_team.retrieval import query_rewriter
 
     return {
+        "planner": _digest(planner.SYSTEM_PROMPT),
         "supervisor": _digest(router.SYSTEM_PROMPT),
         "query_rewriter": _digest(query_rewriter.SYSTEM_PROMPT),
         "analytics": _digest(analytics.SYSTEM_PROMPT),
@@ -131,13 +133,11 @@ def _knowledge_static() -> dict[str, Any]:
         "leaf_chunk_overlap": settings.leaf_chunk_overlap,
         "retrieval_k_per_query": research._RETRIEVAL_K_PER_QUERY,
         "rerank_top_n": research._RERANK_TOP_N,
-        "max_research_findings": research._MAX_FINDINGS,
+        "max_research_findings": settings.run_policy.max_findings,
     }
 
 
 def _memory_safety() -> dict[str, Any]:
-    from market_research_team.agents.analytics import node as analytics
-    from market_research_team.agents.reporting import node as reporting
     from market_research_team.agents.supervisor import router
     from market_research_team.security import input_validation, output_filters, patterns
 
@@ -149,10 +149,15 @@ def _memory_safety() -> dict[str, Any]:
         "response_cache_ttl_seconds": settings.response_cache_ttl_seconds,
         "cache_policy_version": settings.cache_policy_version,
         "recursion_limit": settings.recursion_limit,
-        "max_routing_visits": router._MAX_ROUTING_VISITS,
+        "llm_timeout_seconds": settings.llm_timeout_seconds,
+        "llm_max_retries": settings.llm_max_retries,
+        "mcp_write_timeout_seconds": settings.mcp_write_timeout_seconds,
+        "max_routing_visits": settings.run_policy.max_routing_visits,
+        "max_plan_items": settings.run_policy.max_plan_items,
         "supervisor_finding_snippet_chars": router._FINDING_SNIPPET_CHARS,
-        "max_tool_iterations": analytics._MAX_TOOL_ITERATIONS,
-        "max_review_rounds": reporting._MAX_REVIEW_ROUNDS,
+        "max_tool_iterations": settings.run_policy.max_tool_iterations,
+        "max_review_rounds": settings.run_policy.max_review_rounds,
+        "max_self_check_redrafts": settings.run_policy.max_self_check_redrafts,
         "max_objective_length": input_validation._MAX_OBJECTIVE_LENGTH,
         "unverified_mark": output_filters.UNVERIFIED_MARK,
         "patterns": {
@@ -224,7 +229,7 @@ def trace_metadata() -> dict[str, str]:
 
 
 def clear_cache() -> None:
-    """Drop the cached git SHA -- for tests that set `GIT_SHA`/`CI_COMMIT_SHA`."""
+    """Drop the cached git SHA -- for tests that set `GIT_SHA`/`GITHUB_SHA`/`CI_COMMIT_SHA`."""
 
     git_sha.cache_clear()
 

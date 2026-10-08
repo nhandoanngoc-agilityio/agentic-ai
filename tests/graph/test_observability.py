@@ -143,3 +143,62 @@ def test_record_feedback_score_is_silent_when_disabled_or_failing(monkeypatch: p
     monkeypatch.setattr(observability, "tracing_enabled", lambda: True)
     monkeypatch.setattr(observability, "_client", _fake_client(_Boom()))
     observability.record_feedback_score("thread-1", "up")  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("tags", "component"),
+    [
+        (["seq:step:1", "supervisor_router"], "supervisor_router"),  # inside a graph run
+        (["planner"], "planner"),
+        (["seq:step:3", "langsmith:hidden"], "untagged"),
+        (None, "untagged"),
+    ],
+)
+def test_component_is_the_call_site_tag_not_a_framework_tag(tags, component) -> None:
+    from market_research_team.observability import component_from_tags
+
+    assert component_from_tags(tags) == component
+
+
+def _usage_response(input_tokens: int, output_tokens: int):
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    message = AIMessage(
+        content="ok",
+        usage_metadata={
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    )
+    return LLMResult(generations=[[ChatGeneration(message=message)]])
+
+
+def test_usage_is_summed_per_run_and_taken_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from uuid import uuid4
+
+    from market_research_team import observability
+
+    thread = {"id": "run-a"}
+    monkeypatch.setattr(observability.audit, "current_thread_id", lambda: thread["id"])
+    monkeypatch.setattr(observability.audit, "record", lambda *a, **k: None)
+    handler = observability.TokenUsageCallbackHandler()
+
+    handler.on_llm_end(_usage_response(100, 20), run_id=uuid4(), tags=["planner"])
+    handler.on_llm_end(_usage_response(50, 5), run_id=uuid4(), tags=["supervisor_router"])
+    thread["id"] = "run-b"
+    handler.on_llm_end(_usage_response(7, 3), run_id=uuid4(), tags=["planner"])
+
+    assert observability.take_run_usage("run-a") == {
+        "model_calls": 2,
+        "input_tokens": 150,
+        "output_tokens": 25,
+    }
+    assert observability.take_run_usage("run-a")["model_calls"] == 0  # taken
+    assert observability.take_run_usage("run-b")["model_calls"] == 1
+    assert observability.take_run_usage(None) == {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }

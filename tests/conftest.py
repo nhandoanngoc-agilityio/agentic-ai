@@ -54,3 +54,31 @@ def _langfuse_env_restored():
         if name not in before:
             del os.environ[name]
     os.environ.update(before)
+
+
+@pytest.fixture(autouse=True)
+def _offline_planner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test that builds the real graph runs the planner node; keep it off
+    the network with the deterministic one-item plan (the planner's own
+    fallback). Planner tests monkeypatch `run_planner` back themselves."""
+
+    from market_research_team.agents.planner import node as planner_node_module
+
+    monkeypatch.setattr(planner_node_module, "run_planner", planner_node_module.fallback_plan)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dummy provider keys for every test, real ones hidden.
+
+    `ChatOpenAI` refuses to construct without a key, so a test that only builds
+    a client passed on a machine whose shell exports OPENAI_API_KEY and failed
+    in CI, which has none. The dummies make that hermetic, and clearing the
+    settings keys (read from a local .env) means no test can see a real key.
+    Tests that exercise key handling set their own values.
+    """
+
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-not-a-real-key")

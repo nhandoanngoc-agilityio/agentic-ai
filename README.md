@@ -7,7 +7,9 @@ a final report to disk via a custom local MCP server.
 ## Architecture
 
 ```
-                     ┌───────────────────┐
+               objective → input_guard → planner (2–4 sub-questions)
+                                │
+                     ┌──────────▼────────┐
           ┌─────────▶│  Supervisor Node  │◀─────────┐
           │          └─────────┬─────────┘          │
           │                    │ routes              │
@@ -27,28 +29,61 @@ a final report to disk via a custom local MCP server.
                                        reports/*.md
 ```
 
-- **Supervisor Router Node** — LLM-driven routing between sub-agents via
-  conditional edges; can hand work back to Research or Analytics, not just
-  march forward, bounded by a visit cap. A hand-back to Research names the
-  gap to fill; once a Research pass adds nothing new, Research is no longer
-  offered.
+- **Planner Node** — breaks the objective into 2–4 sub-questions (one company
+  per question, none comparing companies) before any research. If planning fails, the plan
+  is the objective itself, and the run proceeds as a single-question run.
+- **Supervisor Router Node** — routes between sub-agents via conditional edges.
+  On each LLM decision it first judges which plan items the findings answer
+  (an "answered" claim must cite a source that is really in the findings), then
+  hands back to Research for an open item, moves on to Analytics, or to
+  Reporting. Each sub-question gets one targeted Research pass, and Research is
+  offered only while an open item hasn't had it; Analytics is offered again only
+  when the findings changed since it ran. A visit cap is the last safety net. Every route carries a rationale and says who decided it.
 - **Research Agent Node** — advanced RAG: query rewriting/expansion, vector
   retrieval, cross-encoder reranking. On a hand-back it searches for the named
-  gap and merges new findings into the existing ones (deduplicated, capped at
-  10); if nothing clears the rerank floor on the first pass, the run ends with
-  an error instead of retrying.
+  plan item, skipping chunks it already holds and ranking against the gap, and
+  merges the new findings in (deduplicated, capped at 10, new ones kept). A
+  targeted pass that finds nothing new marks that item unanswerable; if
+  nothing clears the rerank floor on the first pass, the run ends with an error
+  instead of retrying.
 - **Analytics Agent Node** — tool-calling agent using native Python
   math/stat functions to evaluate metrics; every reported number is backed
-  by a real tool call.
+  by a real tool call, and each call's inputs are checked against the findings
+  (an input the findings don't contain is flagged and grounds nothing). Each
+  call carries a short label that names the metric in the report.
 - **Reporting Agent** — two nodes. `reporting` drafts a markdown report and
   runs the output guardrails; `report_review` pauses on a human-approval
   interrupt, then calls a custom local MCP server (spawned over stdio) to write
   that exact draft to disk. A rejection loops back to `reporting` for a redraft.
+  Plan items left unanswered are listed under "Open questions" in the draft. If the
+  output check finds figures it can't trace to the evidence, the agent redrafts once
+  before the reviewer sees the draft (a `self_check_redraft` event). Each run writes
+  `<objective slug>-<run id>.md`, and the MCP server never replaces a different
+  existing report, so re-running an objective keeps earlier approved reports.
 
 Every node is wrapped with an error boundary (`guardrails.py`): an
-unexpected failure is recorded into state and ends the run cleanly instead
-of crashing. The safe entrypoint (`run_graph` in `graph.py`) also bounds
-recursion and catches `GraphRecursionError`.
+unexpected failure is recorded into state, labelled with its exception type and
+whether it was transient (timeout, rate limit, connection), and ends the run
+cleanly instead of crashing. Model calls have a timeout and SDK-level retries;
+the MCP write has a timeout. The safe entrypoint (`run_graph` in `graph.py`)
+also bounds recursion and catches `GraphRecursionError`, including on a resume.
+
+### How the agent decides
+
+| Decision | Who makes it |
+|---|---|
+| The sub-questions to answer | The model (planner), with a one-item fallback |
+| Which sub-questions the findings answer | The model, checked by code against the findings' sources |
+| Research again, analyze, or report | The model, among the steps code allows |
+| Which sub-question to research next | The model (`focus_id`), defaulting to the first open item |
+| A sub-question is unanswerable | Code: a targeted pass added nothing |
+| End on error or discard, first research pass, visit cap, finish after the write | Code rules |
+| Which math tool, with which inputs | The model (Analytics), inputs checked against the findings |
+| Whether the report is written | A person (approval interrupt) |
+
+Each supervisor decision is logged as a `route_decision` audit event with
+`decided_by` (`rule`, `llm` or `fallback`) and a rationale, and shown in the run's
+progress messages.
 
 ## Stack
 
@@ -77,7 +112,8 @@ src/market_research_team/
 ├── security/                 # layered guardrails: input validation, output filters, audit log
 ├── caching/                  # retrieval / rerank / opt-in response caches (SQLite)
 ├── agents/
-│   ├── supervisor/           # LLM-driven routing + targeted hand-backs to Research
+│   ├── planner/              # objective -> 2-4 sub-questions (the plan)
+│   ├── supervisor/           # plan coverage + routing, targeted hand-backs, rationale
 │   ├── research/             # research node (uses retrieval/), merges passes
 │   ├── analytics/            # native Python math/stat tool-calling agent
 │   └── reporting/            # draft node + human-review node + MCP client wiring
@@ -144,13 +180,49 @@ CLAUDE.md      # rules for Claude Code (AGENTS.md points other tools here); conf
 
 Verified against this repo's current state, not aspirational:
 
-- **Test suite (2026-10-05)**: 515 `pytest` tests: 512 pass, and the 3 live-Postgres tests skip
-  unless `DATABASE_URL` points at a running server. `ruff check` and `ruff format --check` are
-  clean over `src tests scripts gradio_app`. Hermetic: no API key or seeded vector store required.
+- **Test suite (2026-10-06)**: 639 `pytest` tests: 636 pass, and the 3 live-Postgres tests skip
+  unless `DATABASE_URL` points at a running server. Coverage 94.2% (floor 93%). `ruff check`,
+  `ruff format --check` and `basedpyright` are clean over `src tests scripts gradio_app`.
+  Hermetic: no API key or seeded vector store required. GitHub Actions (`.github/workflows/ci.yml`)
+  runs all of these through
+  `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
+  repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
+  `--worktree` to include uncommitted changes.
+- **Release gate, approved baseline (2026-10-07, 10:05 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` on `harness-polish` (agent `0.1.0+ac2f6794297e`:
+  report self-check, no report overwrite, RunPolicy). Gate passed: task success 0.976, safety
+  1.0, tool accuracy 1.0, judged quality 0.804. 11.4 model calls per graph run (supervisor
+  3.6, query rewriter 3.2, analytics 2.3, report draft 1.3, planner 1.0), cost about $0.0027
+  per run, median run 28.8 s, p95 58.5 s (cap 120 s). The self-check redraft fired in 3 of 9
+  graph runs; a redraft roughly doubles the report step, which accounts for the two slowest
+  runs (52 s, 58.5 s; the rest 24–34 s). The one failure is the known-unstable
+  `supervisor_decision/plan_covered_analysis_done` (1 of 3 repeats).
+- **Previous baseline (2026-10-07, 08:30 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` after the targeted-research fix and the
+  work-based gate, with model usage counted for every call. Gate passed: task success 1.0,
+  safety 1.0, tool accuracy 1.0, judged quality 0.822. 11.7 model calls per graph run
+  (supervisor 4.0, query rewriter 3.7, analytics 2.0, planner 1.0, report draft 1.0), cost
+  about $0.0027 per run (the first figure that counts every call), median run 27.7 s, p95
+  44.5 s (absolute cap 120 s). Recorded in `evals/baseline.json`.
+- **Previous baseline (2026-10-07, 03:43 UTC)**: `run_evals.py --provider openai --langsmith
+  --repeats 3 --update-baseline`, agent version `0.1.0+5b4a9c54be7d` (planner and
+  coverage-driven supervisor; `gpt-4o-mini`, judge `gpt-5.4-mini`). Gate passed: task success
+  0.952, safety 1.0, tool accuracy 1.0, judged quality 0.848 (analytics 1.00, supervisor 0.94,
+  full pipeline 0.87, reporting 0.79, query rewrite 0.73), p95 latency 26.4 s. Its cost figure
+  (about $0.00045 per run) counted only the report draft: until 2026-10-07 usage was recorded
+  only for plain model calls, so the planner, supervisor, query rewriter and analytics calls
+  were missing (see `docs/architecture.md`); the real cost per run is higher. Planning,
+  trajectory and both regression cases pass in all 3 repeats. The one
+  unstable case is `supervisor_decision/plan_covered_analysis_done` (1 of 3 here, 3 of 3 in the
+  run before): gpt-4o-mini sometimes keeps a contract-value range open "to confirm" it.
+  Getting there took two failed gate runs, each diagnosed from the run's audit log: a research
+  loop, then an analytics loop (see `docs/architecture.md`, 2026-10-06). The LangSmith
+  per-category `pass_rate` it prints counts a row as passed only if the judge scored exactly
+  1.0, so judged categories can read 0.00; the gate uses the judge mean instead.
 - **Postgres checkpointer (2026-10-05)**: with `DATABASE_URL` pointing at a local Postgres, all
   11 `tests/checkpointing` tests pass, including the 3 live ones: the real graph saves its
   checkpoints to Postgres, resumes through the approval interrupt, and keeps threads separate.
-- **Release gate, approved baseline (2026-10-06)**: `run_evals.py --provider openai --langsmith
+- **Previous baseline (2026-10-06, before the planner)**: `run_evals.py --provider openai --langsmith
   --repeats 3`, agent version `0.1.0+b6428b4bd1cc` (`gpt-4o-mini`, judge `gpt-5.4-mini`). Gate
   passed: task success 1.0, safety 1.0, tool accuracy 1.0, judged quality 0.892 averaged over
   21 judged rows (analytics 1.00, supervisor 0.96, full pipeline 0.90, reporting 0.86, query
@@ -335,9 +407,11 @@ What happens during a run:
 4. On approval, the report is written through the local MCP filesystem server to `reports/`
    (or `REPORTS_DIR`).
 
-Re-running with the same `--thread-id` resumes from the checkpoint (SQLite by default,
-Postgres when `DATABASE_URL` is set; see [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md))
-instead of starting over. Every run spends real API money — the test suite does not.
+Each run is checkpointed under its thread id (SQLite by default, Postgres when
+`DATABASE_URL` is set; see [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md)), and
+the approval prompt resumes it within the same CLI session. `--thread-id` must be new: the CLI
+refuses an id that already has a run, since a fresh run on an old thread would inherit its
+state. Every run spends real API money — the test suite does not.
 
 **Option B — LangGraph Studio:**
 
@@ -401,8 +475,14 @@ reporting, full_pipeline, safety, and regression (curated production failures, s
 ### Release gate
 
 Every run ends with a gate verdict per provider: task success, judged quality, tool accuracy,
-safety (must be 100%), p95 latency and cost per run, checked against absolute floors and
-against the last approved baseline for that provider.
+safety (must be 100%), model calls per run, p95 latency and cost per run, checked against
+absolute floors and against the last approved baseline for that provider.
+
+- Work, not wall-clock time, is compared with the baseline: model calls per graph run (+25%)
+  and cost per run (+20%) move when the agent loops or takes longer routes, and stay put when
+  the provider is slow. Run time is bounded by the absolute p95 cap; a median run time more
+  than 25% above the baseline is reported as a warning, with the model-call change beside it.
+  The gate output prints model calls per run by component for the candidate and the baseline.
 
 - `evals/gate.toml` holds the thresholds, tolerances, the pinned judge model and per-model
   prices. A model without a price stops the run before it spends anything.
@@ -490,6 +570,9 @@ and can be overridden via `.env` or real environment variables. From
 | `AUDIT_LOG_PATH` | `./data/audit.jsonl` | Append-only JSONL audit log of finished runs and human decisions |
 | `AUDIT_RETENTION_DAYS` / `AUTO_PRUNE_ENABLED` | `90` / `true` | Retention window for the audit log and checkpoints; daily auto-prune at startup |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` | unset | Pinned sampling parameters (provider default when unset); part of the agent version |
+| `LLM_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `60` / `2` | Per-call deadline and SDK retries (rate limits, 5xx, connection errors); part of the agent version |
+| `MCP_WRITE_TIMEOUT_SECONDS` | `30` | Deadline for one MCP report write, including spawning the server |
+| `RUN_POLICY__MAX_ROUTING_VISITS`, `__MAX_PLAN_ITEMS`, `__MAX_TOOL_ITERATIONS`, `__MAX_FINDINGS`, `__MAX_REVIEW_ROUNDS`, `__MAX_SELF_CHECK_REDRAFTS` | `8`, `4`, `4`, `10`, `3`, `1` | Run limits, all in `RunPolicy` (`config.py`); part of the agent version |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | unset | Optional Langfuse tracing; a no-op unless both keys are set |
 
 Other tunables (`anthropic_model` / `openai_model` names, defaults `claude-sonnet-5-5` /
@@ -518,11 +601,10 @@ to touch to run the demo. Every node builds its LLM through
 
 Honest gaps, not hidden:
 
-- **GitLab CI is switched off.** The test job ran out of disk on the GitLab runner while
-  installing dependencies, so `.gitlab-ci.yml` was emptied on 2026-10-02 (`aa00df4`). Restore it
-  with `git show 6143b86:.gitlab-ci.yml > .gitlab-ci.yml` once the runner has space. Until then,
-  run `pytest` and `ruff` locally before pushing. Even with CI on, the real-LLM release gate
-  stays a manual step: it costs money and needs API keys.
+- **CI runs on GitHub Actions, not GitLab.** The company GitLab runner ran out of disk while
+  installing dependencies (torch and friends), so `.gitlab-ci.yml` was removed on 2026-10-08 and
+  the same job moved to `.github/workflows/ci.yml`. It runs only where the repository is pushed
+  to GitHub. The real-LLM release gate stays a manual step: it costs money and needs API keys.
 - **No Anthropic baseline.** `evals/baseline.json` has an approved baseline for OpenAI only, so
   an Anthropic eval run gets the absolute checks but no comparison against a baseline. Approving
   one needs a paid `run_evals.py --provider anthropic --repeats 3 --update-baseline` run.
@@ -531,9 +613,9 @@ Honest gaps, not hidden:
   against a local Postgres on 2026-10-05 (see Results). It hasn't run against a managed
   Postgres or with several app instances sharing one database; see
   [docs/postgres_checkpointer.md](docs/postgres_checkpointer.md) Part 2 before doing that.
-- **Merge requests aren't gated.** Work goes through feature branches and GitLab merge requests,
-  and `main` is protected against force-push, but nothing requires an approval or a passing
-  pipeline before a merge.
+- **Merges aren't gated.** Work goes through feature branches, and `main` is protected against
+  force-push, but nothing requires an approval or a passing CI run before a merge. On GitHub,
+  a branch protection rule requiring the `CI / ruff, basedpyright, pytest` check would add that.
 - **LangGraph Studio was validated via its API only.** `langgraph dev` was run and driven
   programmatically; the browser Studio UI itself (time-travel, manual state inspection) hasn't
   been clicked through interactively.

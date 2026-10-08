@@ -4,6 +4,7 @@ from market_research_team.security.output_filters import (
     flag_unverified_numbers,
     redact_pii,
     scrub_secrets,
+    ungrounded_inputs,
     warnings_from_events,
 )
 from market_research_team.state import AnalyticsResult, ResearchFinding
@@ -95,3 +96,47 @@ def test_apply_output_guardrails_runs_all_passes_and_collects_events() -> None:
     rules = [event["rule"] for event in events]
     assert rules == ["pii_email", "unverified_numbers"]
     assert warnings_from_events(events)[0].startswith("pii_email:")
+
+
+def test_a_result_computed_from_invented_inputs_is_not_evidence() -> None:
+    """The model chose the tool arguments, so they can't vouch for themselves:
+    mean([120, 180]) = 150 grounds neither 120, 180 nor 150."""
+
+    invented: list[AnalyticsResult] = [
+        {
+            "metric": "mean",
+            "value": 150.0,
+            "detail": "mean([120, 180]) = 150",
+            "entity": None,
+            "inputs": [120.0, 180.0],
+        }
+    ]
+    draft = "Average deal size is $150 across deals of $120 and $180."
+
+    annotated, events = flag_unverified_numbers(draft, _findings(), invented)
+
+    assert annotated.count(UNVERIFIED_MARK.strip()) == 3
+    assert len(events) == 1
+    assert all(figure in events[0]["detail"] for figure in ("$150", "$120", "$180"))
+
+
+def test_a_result_computed_from_grounded_inputs_is_evidence() -> None:
+    grounded: list[AnalyticsResult] = [
+        {
+            "metric": "mean",
+            "value": 275000.0,
+            "detail": "mean",
+            "entity": None,
+            "inputs": [150000.0, 400000.0],
+        }
+    ]
+
+    annotated, events = flag_unverified_numbers("Mean ACV is $275,000.", _findings(), grounded)
+
+    assert UNVERIFIED_MARK not in annotated
+    assert events == []
+
+
+def test_ungrounded_inputs_ignores_small_numbers_and_tolerates_rounding() -> None:
+    # 3 (periods) is under the checked floor; 400,001 is within 1% of 400K; 85M is invented.
+    assert ungrounded_inputs([3.0, 400001.0, 85_000_000.0], _findings()) == [85_000_000.0]

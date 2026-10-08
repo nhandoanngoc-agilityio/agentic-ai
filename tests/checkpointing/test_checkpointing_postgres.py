@@ -50,6 +50,7 @@ pytestmark = pytest.mark.skipif(
 def _fake_research_pipeline(
     objective: str,
     focus: str | None = None,
+    exclude: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[list[ResearchFinding], int, int, list[dict[str, str]]]:
     return (
         [{"source": "mock", "content": f"finding for {objective}", "relevance_score": 0.9}],

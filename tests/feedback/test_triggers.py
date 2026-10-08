@@ -19,6 +19,11 @@ from market_research_team.feedback.triggers import detect_triggers, suggest_expe
         (RunEvidence("t", decisions=[{"discard": True}, {"approved": True}]), []),
         (RunEvidence("t", error="Recursion limit reached: 20"), ["run_error"]),
         (
+            RunEvidence("t", error="analytics failed (RateLimitError, transient): 429"),
+            ["transient_error"],
+        ),
+        (RunEvidence("t", error="analytics failed (KeyError): 'x'"), ["run_error"]),
+        (
             RunEvidence(
                 "t",
                 error="Input rejected: matched injection pattern",

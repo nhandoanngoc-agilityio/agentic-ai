@@ -20,6 +20,29 @@ class GuardrailEvent(TypedDict):
     detail: str
 
 
+PlanStatus = Literal["open", "answered", "unanswerable"]
+
+
+class PlanItem(TypedDict):
+    """One sub-question of the objective, tracked until it is answered.
+
+    The planner writes the items (all `open`). The supervisor marks an item
+    `answered` once findings from named sources cover it -- code checks those
+    sources exist. Research marks an item `attempted` after a pass targeted
+    at it, and `unanswerable` when that pass finds nothing new: the knowledge
+    base doesn't hold the answer.
+    """
+
+    id: str
+    question: str
+    status: PlanStatus
+    sources: list[str]
+    # Set by Research after a pass targeted at this item. Each item gets one
+    # targeted search: retargeting the same question mostly re-retrieves the
+    # same chunks, so a second pass costs a loop iteration for little gain.
+    attempted: NotRequired[bool]
+
+
 class ResearchFinding(TypedDict):
     """A single retrieved-and-reranked piece of evidence."""
 
@@ -38,6 +61,14 @@ class AnalyticsResult(TypedDict):
     # objective compares multiple named entities. None for single-subject
     # runs; set from the `entity` tool argument in `run_tool_calling_loop`.
     entity: str | None
+    # The numeric arguments the model passed to the tool. Checked against the
+    # findings (`output_filters.ungrounded_inputs`): an input the findings
+    # don't contain is a figure the model supplied, not one it read.
+    inputs: NotRequired[list[float]]
+    # What the metric means, in the model's words (e.g. "Globex ACV range"),
+    # from the tool's `label` argument. `metric` stays the tool name: the UI
+    # chart groups results by it across entities.
+    label: NotRequired[str | None]
 
 
 class AgentState(TypedDict):
@@ -62,6 +93,18 @@ class AgentState(TypedDict):
     # new sets `research_exhausted`, after which Research is no longer offered.
     research_focus: NotRequired[str | None]
     research_exhausted: NotRequired[bool]
+    # The plan: the objective decomposed into sub-questions (`planner` node),
+    # whose coverage drives the supervisor. `research_focus_id` names the plan
+    # item a hand-back targets, so Research can mark it unanswerable if the
+    # targeted pass adds nothing. Without a plan (empty list) routing falls
+    # back to `research_exhausted` alone.
+    plan: NotRequired[list[PlanItem]]
+    research_focus_id: NotRequired[str | None]
+    # Research bumps `findings_version` whenever it adds findings; Analytics
+    # records the version it analyzed. Analytics is offered again only when
+    # the findings changed since, so a re-run always has something new.
+    findings_version: NotRequired[int]
+    analyzed_findings_version: NotRequired[int]
     # Hand-off between `reporting_node` (drafts) and `report_review_node`
     # (interrupt + write). The draft lives in checkpointed state so resuming
     # the review never re-drafts: the file written is byte-for-byte the draft
@@ -81,3 +124,38 @@ class AgentState(TypedDict):
     # straight to `reporting` -- drafting and human approval still always
     # run fresh regardless of this flag.
     from_response_cache: NotRequired[bool]
+    # How many times the supervisor has decided so far in this run. The visit
+    # cap reads this rather than counting `messages`, which is a log only.
+    supervisor_visits: NotRequired[int]
+
+
+def new_run_state(objective: str) -> AgentState:
+    """The input for a fresh run, with every per-run field set explicitly.
+
+    The one builder the CLI, the Gradio app and the eval harness share, so a
+    field added to `AgentState` is reset in exactly one place.
+    """
+
+    return {
+        "messages": [],
+        "objective": objective,
+        "next": "research",
+        "research_findings": [],
+        "analytics_results": [],
+        "report_path": None,
+        "error": None,
+        "report_discarded": False,
+        "research_focus": None,
+        "research_exhausted": False,
+        "plan": [],
+        "research_focus_id": None,
+        "findings_version": 0,
+        "analyzed_findings_version": 0,
+        "report_draft": None,
+        "report_draft_warnings": [],
+        "report_review_round": 0,
+        "report_feedback": None,
+        "guardrail_events": [],
+        "from_response_cache": False,
+        "supervisor_visits": 0,
+    }

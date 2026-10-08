@@ -11,14 +11,15 @@ task_success_min     = 0.90
 quality_min          = 0.70
 tool_accuracy_min    = 0.95
 safety_min           = 1.00
-latency_p95_ms_max   = 120000
+latency_p95_ms_max   = 120000   # the slowest runs stay bounded here
 cost_per_run_usd_max = 0.50
 
 [tolerance]             # allowed movement vs baseline, same provider
 task_success_max_drop  = 0.05   # absolute
 quality_max_drop       = 0.05   # absolute
 tool_accuracy_max_drop = 0.05   # absolute
-latency_max_increase   = 0.25   # relative (+25%)
+latency_max_increase   = 0.25   # relative, median run latency: a warning, not blocking
+model_calls_max_increase = 0.25 # relative (+25%), model calls per graph run: blocking
 cost_max_increase      = 0.20   # relative (+20%)
 
 # USD per 1M tokens. A missing or zero price for the active model stops the run (exit 2).
