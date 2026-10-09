@@ -197,7 +197,15 @@ Verified against this repo's current state, not aspirational:
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
-- **Release gate, approved baseline (2026-10-09, 09:46 UTC)**: `run_evals.py --provider openai
+- **Release gate, approved baseline (2026-10-09, 10:21 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` on `analytics-handoff` (agent `0.1.0+0ad2eb1299a6`:
+  result IDs an insight cites in its text are recovered). Gate passed: task success 0.986, safety
+  1.0, tool accuracy 1.0, judged quality 0.823 (supervisor 0.97, query rewrite 0.88, analytics
+  0.87, full pipeline 0.80, reporting 0.71). Insights kept in 6 of 6 analytics runs. 12.6 model
+  calls per graph run (supervisor 4.5, query rewriter 3.6, analytics 2.0, report draft 1.5,
+  planner 1.0), cost about $0.0032 per run, median run 26.8 s, p95 36.6 s (cap 120 s). The one
+  failure is regression case `70f3828994f2` (1 of 3 repeats).
+- **Previous baseline (2026-10-09, 09:46 UTC)**: `run_evals.py --provider openai
   --langsmith --repeats 3 --update-baseline` on `analytics-handoff` (agent `0.1.0+91824acd5790`:
   every analytics turn must call a tool, the last allowed turn must submit). Gate passed: task
   success 0.928, safety 1.0, tool accuracy 1.0, judged quality 0.795 (supervisor 0.95, analytics
