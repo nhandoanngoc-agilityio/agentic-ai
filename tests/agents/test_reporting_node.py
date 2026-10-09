@@ -362,3 +362,71 @@ def test_a_stale_figure_also_triggers_the_self_check(monkeypatch) -> None:
 
     assert len(notes) == 2 and "$49" in (notes[1] or "")
     assert [e["rule"] for e in update["guardrail_events"]] == ["self_check_redraft"]
+
+
+_IDS_RESULT = {
+    "metric": "mean",
+    "value": 35.0,
+    "detail": "mean([15, 55]) = 35.0",
+    "id": "r1",
+    "label": "Average seat price",
+}
+_ONE_INSIGHT = [{"text": "The average seat price is $35.", "result_ids": ["r1"]}]
+
+
+def test_insights_render_above_metrics_with_their_ids() -> None:
+    section = reporting_node_module._results_section([_IDS_RESULT], _ONE_INSIGHT)  # type: ignore[list-item]
+
+    assert section == (
+        "Key insights:\n"
+        "- The average seat price is $35. (from r1)\n"
+        "Computed metrics:\n"
+        "- r1 Average seat price: 35.0 (mean([15, 55]) = 35.0)"
+    )
+
+
+def test_without_insights_the_analytics_block_is_unchanged() -> None:
+    section = reporting_node_module._results_section([_IDS_RESULT])  # type: ignore[list-item]
+
+    assert section == "- Average seat price: 35.0 (mean([15, 55]) = 35.0)"
+
+
+def test_the_fallback_report_lists_insights() -> None:
+    report = reporting_node_module._fallback_report("x", [], [_IDS_RESULT], _ONE_INSIGHT)  # type: ignore[list-item]
+
+    assert "The average seat price is $35. (from r1)" in report
+
+
+def test_the_report_prompt_uses_insights() -> None:
+    assert "key insights" in reporting_node_module.SYSTEM_PROMPT
+
+
+def test_draft_report_puts_insights_in_the_prompt() -> None:
+    seen: list[str] = []
+
+    class _LLM:
+        def invoke(self, messages, config=None):
+            seen.append(messages[1].content)
+            return AIMessage(content="# Report")
+
+    draft_report("x", [], [_IDS_RESULT], _LLM(), insights=_ONE_INSIGHT)  # type: ignore[arg-type]
+
+    assert "Key insights:" in seen[0]
+
+
+def test_reporting_node_passes_insights_and_tolerates_their_absence(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def _draft(objective, findings, results, llm, feedback=None, **kwargs):
+        calls.append(kwargs)
+        return "Report."
+
+    monkeypatch.setattr(reporting_node_module, "draft_report", _draft)
+    monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
+    monkeypatch.setattr(reporting_node_module, "put_cached_response", lambda *a, **k: None)
+
+    reporting_node_module.reporting_node(_review_state(analytics_insights=_ONE_INSIGHT))  # type: ignore[arg-type]
+    reporting_node_module.reporting_node(_review_state())  # type: ignore[arg-type]
+
+    assert calls[0].get("insights") == _ONE_INSIGHT
+    assert "insights" not in calls[1]
