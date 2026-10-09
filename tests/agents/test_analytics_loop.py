@@ -533,3 +533,23 @@ def test_the_node_stores_validated_insights_and_reports_drops(monkeypatch) -> No
     assert update["messages"][0].content.endswith(
         "1 metric(s) computed via tool calls; 1 insight(s)."
     )
+
+
+def test_a_failed_call_keeps_its_id_slot_so_later_ids_match_the_call_order() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    insight = {"text": "The mean is 4.", "result_ids": ["r2"]}
+    llm = _RecordingLLM(
+        [
+            _ai(
+                _call("percent_change", {"start_value": 0, "end_value": 5}, "bad"),
+                _call("mean", {"values": [2, 6]}, "a"),
+                _call("submit_analysis", {"insights": [insight]}, "s"),
+            )
+        ]
+    )
+
+    results, raw = run_analysis_loop(llm, [mean, percent_change], "x", [])  # type: ignore[arg-type]
+
+    assert [(r["metric"], r.get("id")) for r in results] == [("mean", "r2")]
+    assert raw == [insight]

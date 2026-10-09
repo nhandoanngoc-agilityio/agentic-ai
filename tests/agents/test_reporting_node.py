@@ -430,3 +430,7 @@ def test_reporting_node_passes_insights_and_tolerates_their_absence(monkeypatch)
 
     assert calls[0].get("insights") == _ONE_INSIGHT
     assert "insights" not in calls[1]
+
+
+def test_the_report_prompt_keeps_result_ids_out_of_the_report() -> None:
+    assert "result IDs" in reporting_node_module.SYSTEM_PROMPT

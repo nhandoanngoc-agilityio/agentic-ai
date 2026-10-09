@@ -120,3 +120,23 @@ def test_malformed_input_never_raises() -> None:
 
     insights, events = validate_insights([{"text": 3}, "x", {"text": "ok"}], _RESULTS, _FINDINGS)
     assert insights == [] and _reasons(events) == ["malformed insight"] * 3
+
+
+def test_a_percentage_rounded_to_a_whole_number_is_grounded() -> None:
+    results: Any = [
+        {"metric": "percent_change", "value": 12.24, "detail": "d", "inputs": [], "id": "r1"}
+    ]
+
+    insights, events = validate_insights(
+        [{"text": "Prices grew 12% year on year.", "result_ids": ["r1"]}], results, _FINDINGS
+    )
+
+    assert insights and not events
+
+
+def test_a_submission_sent_as_a_json_string_is_parsed() -> None:
+    raw = '[{"text": "Acme is the most expensive vendor.", "result_ids": ["r2"]}]'
+
+    insights, events = validate_insights(raw, _RESULTS, _FINDINGS)
+
+    assert len(insights) == 1 and not events

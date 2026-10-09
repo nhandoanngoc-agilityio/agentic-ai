@@ -13,6 +13,7 @@ not by a second model call, so this adds no tokens and no measurable latency.
 """
 
 import calendar
+import json
 import re
 from typing import Any
 
@@ -175,6 +176,17 @@ def ungrounded_inputs(
 INSIGHT_MAX_CHARS = 300
 
 
+def _rounds_from(match: re.Match[str], evidence: set[float]) -> bool:
+    """A whole number in an insight that rounds a computed value ("12%" for
+    12.24): a summary states figures the way a reader would, so this is the
+    computation, not an invented figure."""
+
+    if match.group("decimal"):
+        return False
+    value = _token_value(match)
+    return any(abs(candidate - value) < 0.5 for candidate in evidence)
+
+
 def validate_insights(
     raw: Any, results: list[AnalyticsResult], findings: list[ResearchFinding]
 ) -> tuple[list[AnalyticsInsight], list[GuardrailEvent]]:
@@ -196,6 +208,12 @@ def validate_insights(
         detail = f"{reason}: {text[:80]}" if text else reason
         events.append({"layer": "tool", "rule": "ungrounded_insight", "detail": detail})
 
+    if isinstance(raw, str):
+        # Some providers send a nested array argument as JSON text.
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            pass
     if not raw:
         return [], events
     if not isinstance(raw, list):
@@ -226,6 +244,7 @@ def validate_insights(
             for match in _NUMBER_TOKEN.finditer(text)
             if _token_value(match) >= _MIN_CHECKED_VALUE
             and not _is_grounded(_token_value(match), evidence)
+            and not _rounds_from(match, evidence)
             and not _is_source_year(match, years)
         ]
         if ungrounded:

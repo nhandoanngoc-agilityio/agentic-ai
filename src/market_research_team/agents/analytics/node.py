@@ -159,6 +159,7 @@ def run_analysis_loop(
 
     results: list[AnalyticsResult] = []
     submitted: Any = None
+    call_number = 0
     if max_iterations is None:
         max_iterations = settings.run_policy.max_tool_iterations
     for _ in range(max_iterations):
@@ -173,6 +174,11 @@ def run_analysis_loop(
         for tool_call in tool_calls:
             if tool_call["name"] == SUBMIT_TOOL_NAME:
                 continue  # handled after the math in this turn, so it can cite it
+            # Every math call takes the next ID, failed ones too, so the IDs
+            # a same-turn submission predicts from call order stay right; a
+            # failed call's ID matches no result and can't be cited.
+            call_number += 1
+            result_id = f"r{call_number}"
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             tool = tools_by_name.get(tool_name)
@@ -180,7 +186,10 @@ def run_analysis_loop(
             if tool is None:
                 _record_tool_call(tool_name, 0.0, "unknown_tool")
                 messages.append(
-                    ToolMessage(content=f"Unknown tool: {tool_name}", tool_call_id=tool_call["id"])
+                    ToolMessage(
+                        content=f"{result_id} failed: Unknown tool: {tool_name}",
+                        tool_call_id=tool_call["id"],
+                    )
                 )
                 continue
 
@@ -189,11 +198,14 @@ def run_analysis_loop(
                 output = tool.invoke(tool_args)
             except Exception as exc:
                 _record_tool_call(tool_name, (time.perf_counter() - start) * 1000, "error")
-                messages.append(ToolMessage(content=f"Error: {exc}", tool_call_id=tool_call["id"]))
+                messages.append(
+                    ToolMessage(
+                        content=f"{result_id} failed: Error: {exc}", tool_call_id=tool_call["id"]
+                    )
+                )
                 continue
             _record_tool_call(tool_name, (time.perf_counter() - start) * 1000, "ok")
 
-            result_id = f"r{len(results) + 1}"
             results.append(
                 {
                     "metric": tool_name,
