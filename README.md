@@ -197,7 +197,17 @@ Verified against this repo's current state, not aspirational:
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
-- **Release gate, approved baseline (2026-10-09, 03:09 UTC)**: `run_evals.py --provider openai
+- **Release gate, approved baseline (2026-10-09, 09:22 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` on `analytics-handoff` (agent `0.1.0+ef2c252536de`:
+  Analytics hands Reporting validated insights via `submit_analysis`). Gate passed: task success
+  0.957, safety 1.0, tool accuracy 1.0, judged quality 0.810 (analytics 0.90, supervisor 0.94,
+  query rewrite 0.82, full pipeline 0.80, reporting 0.70). 12.7 model calls per graph run
+  (supervisor 4.3, query rewriter 3.5, analytics 2.3, report draft 1.5, planner 1.0), cost about
+  $0.0034 per run, median run 27.7 s, p95 37.5 s (cap 120 s). gpt-4o-mini submitted insights in
+  4 of 6 analytics runs; the 2 that didn't fail their case. The other failure is regression case
+  `70f3828994f2` (1 of 3 repeats). The previous run on the same code failed only judged quality
+  (0.773), on categories this change didn't touch: judge variance, not a regression.
+- **Previous baseline (2026-10-09, 03:09 UTC)**: `run_evals.py --provider openai
   --langsmith --repeats 3 --update-baseline` on `corpus-freshness` (agent `0.1.0+3a8c2f83d050`:
   12 dated documents, newest source wins, older figures labelled). Gate passed: task success
   0.970, safety 1.0, tool accuracy 1.0, judged quality 0.851. 11.5 model calls per graph run
