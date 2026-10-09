@@ -75,6 +75,20 @@ class AnalyticsResult(TypedDict):
     # from the tool's `label` argument. `metric` stays the tool name: the UI
     # chart groups results by it across entities.
     label: NotRequired[str | None]
+    # The result's ID within one analytics pass ("r1", "r2", ... in call
+    # order), so insights can cite the computations they rest on.
+    id: NotRequired[str]
+
+
+class AnalyticsInsight(TypedDict):
+    """One claim Analytics draws from its computations, for Reporting.
+
+    Validated before it reaches state (security/output_filters.py::
+    validate_insights): it cites real result IDs and states no figure the
+    evidence doesn't support."""
+
+    text: str
+    result_ids: list[str]
 
 
 class AgentState(TypedDict):
@@ -85,6 +99,10 @@ class AgentState(TypedDict):
     next: RouteDecision
     research_findings: list[ResearchFinding]
     analytics_results: list[AnalyticsResult]
+    # Analytics' validated summary of its results; replaced on each pass.
+    # Empty when the model didn't submit one (Reporting then renders the raw
+    # results as before).
+    analytics_insights: NotRequired[list[AnalyticsInsight]]
     report_path: str | None
     error: NotRequired[str | None]
     # Set by `report_review_node` when a human explicitly discards a draft rather
@@ -151,6 +169,7 @@ def new_run_state(objective: str) -> AgentState:
         "next": "research",
         "research_findings": [],
         "analytics_results": [],
+        "analytics_insights": [],
         "report_path": None,
         "error": None,
         "failed_node": None,

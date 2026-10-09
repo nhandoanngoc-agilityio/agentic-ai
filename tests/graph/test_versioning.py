@@ -188,3 +188,9 @@ def test_the_planner_is_told_not_to_tie_sub_questions_to_a_source():
 
     assert "never name a document" in planner.SYSTEM_PROMPT
     assert "customer-review digest" not in planner.SYSTEM_PROMPT
+
+
+def test_the_insight_limit_is_in_the_manifest():
+    safety = versioning.build_manifest()["components"]["memory_safety"]
+
+    assert safety["max_insights"] == settings.run_policy.max_insights == 5

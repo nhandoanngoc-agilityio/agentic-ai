@@ -25,3 +25,9 @@ def test_new_run_state_sets_every_state_field() -> None:
     assert state["objective"] == "Assess Acme pricing"
     assert state.get("supervisor_visits") == 0
     assert state.get("guardrail_events") == []
+
+
+def test_a_fresh_run_starts_without_analytics_insights():
+    from market_research_team.state import new_run_state
+
+    assert new_run_state("Assess Acme pricing").get("analytics_insights") == []

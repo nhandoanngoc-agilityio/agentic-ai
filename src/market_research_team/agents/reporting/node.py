@@ -15,8 +15,8 @@ from market_research_team.async_utils import run_coroutine_sync
 from market_research_team.caching.response_cache import put_cached_response
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
-from market_research_team.retrieval.evidence import finding_label, superseded
 from market_research_team.memory import current_store, recent_feedback, remember_feedback
+from market_research_team.retrieval.evidence import finding_label, superseded
 from market_research_team.security import audit
 from market_research_team.security.fencing import ANALYTICS_TAG, FINDINGS_TAG, GUIDANCE_TAG, fence
 from market_research_team.security.output_filters import (

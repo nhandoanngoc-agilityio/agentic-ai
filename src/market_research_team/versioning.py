@@ -159,6 +159,7 @@ def _memory_safety() -> dict[str, Any]:
         "max_plan_items": settings.run_policy.max_plan_items,
         "supervisor_finding_snippet_chars": router._FINDING_SNIPPET_CHARS,
         "max_tool_iterations": settings.run_policy.max_tool_iterations,
+        "max_insights": settings.run_policy.max_insights,
         "max_review_rounds": settings.run_policy.max_review_rounds,
         "max_self_check_redrafts": settings.run_policy.max_self_check_redrafts,
         "max_run_tokens": settings.run_policy.max_run_tokens,

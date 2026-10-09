@@ -28,6 +28,9 @@ class RunPolicy(BaseModel):
     # Model turns in the analytics tool-calling loop (a plain Python loop, not
     # covered by LangGraph's recursion limit).
     max_tool_iterations: int = 4
+    # Insights Analytics may hand Reporting per pass; more would crowd the
+    # report's Analysis section without adding information.
+    max_insights: int = 5
     # Findings kept across research passes, so repeated hand-backs can't grow
     # the analytics and report prompts without bound.
     max_findings: int = 10
