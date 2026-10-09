@@ -30,14 +30,14 @@ def _fake_research_pipeline(
 
 def _fake_analytics_pipeline(
     objective: str, findings: list[ResearchFinding]
-) -> list[AnalyticsResult]:
+) -> tuple[list[Any], None]:
     return [
         {
             "metric": "mock_finding_count",
             "value": float(len(findings)),
             "detail": "Mock analytics result for testing.",
         }
-    ]
+    ], None
 
 
 def _fake_draft_report(

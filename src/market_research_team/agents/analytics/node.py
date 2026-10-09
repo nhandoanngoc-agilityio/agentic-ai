@@ -17,7 +17,7 @@ from market_research_team.llm import get_chat_model
 from market_research_team.retrieval.evidence import finding_key, finding_label, superseded
 from market_research_team.security import audit
 from market_research_team.security.fencing import FINDINGS_TAG, fence
-from market_research_team.security.output_filters import ungrounded_inputs
+from market_research_team.security.output_filters import ungrounded_inputs, validate_insights
 from market_research_team.state import AgentState, AnalyticsResult, GuardrailEvent, ResearchFinding
 
 
@@ -234,24 +234,30 @@ def run_tool_calling_loop(
 
 def run_analytics_pipeline(
     objective: str, findings: list[ResearchFinding]
-) -> list[AnalyticsResult]:
-    """Production wiring: the real Claude model bound to the native math/stat tools."""
+) -> tuple[list[AnalyticsResult], Any]:
+    """Production wiring: the real chat model bound to the math tools and
+    `submit_analysis`. Returns the results and the raw submitted insights."""
 
     llm = get_chat_model()
-    return run_tool_calling_loop(llm, ANALYTICS_TOOLS, objective, findings)
+    return run_analysis_loop(llm, ANALYTICS_TOOLS, objective, findings)
 
 
 def analytics_node(state: AgentState) -> dict[str, Any]:
     findings = state.get("research_findings", [])
-    results = run_analytics_pipeline(state["objective"], findings)
+    results, raw_insights = run_analytics_pipeline(state["objective"], findings)
+    insights, insight_events = validate_insights(raw_insights, results, findings)
 
     return {
         "analytics_results": results,
+        "analytics_insights": insights,
         "analyzed_findings_version": state.get("findings_version", 0),
-        "guardrail_events": tool_input_events(results, findings),
+        "guardrail_events": [*tool_input_events(results, findings), *insight_events],
         "messages": [
             AIMessage(
-                content=f"Analytics complete: {len(results)} metric(s) computed via tool calls.",
+                content=(
+                    f"Analytics complete: {len(results)} metric(s) computed via tool calls; "
+                    f"{len(insights)} insight(s)."
+                ),
                 name="analytics_agent",
             )
         ],

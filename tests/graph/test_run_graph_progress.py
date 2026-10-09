@@ -43,7 +43,7 @@ def _stub_pipelines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         analytics_node_module,
         "run_analytics_pipeline",
-        lambda objective, findings: [{"metric": "mean", "value": 49.0, "detail": "d"}],
+        lambda objective, findings: ([{"metric": "mean", "value": 49.0, "detail": "d"}], None),
     )
     monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
     monkeypatch.setattr(

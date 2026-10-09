@@ -166,9 +166,10 @@ def test_a_reviewer_s_feedback_in_one_run_guides_the_next_run(
     monkeypatch.setattr(
         analytics_node_module,
         "run_analytics_pipeline",
-        lambda objective, findings: [
-            {"metric": "mean", "value": 49.0, "detail": "d", "entity": None, "inputs": [49.0]}
-        ],
+        lambda objective, findings: (
+            [{"metric": "mean", "value": 49.0, "detail": "d", "entity": None, "inputs": [49.0]}],
+            None,
+        ),
     )
     monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
     monkeypatch.setattr(reporting_node_module, "draft_report", _draft)

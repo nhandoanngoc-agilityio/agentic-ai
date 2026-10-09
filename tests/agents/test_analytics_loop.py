@@ -281,9 +281,18 @@ def test_analytics_node_returns_tool_input_events(monkeypatch) -> None:
     monkeypatch.setattr(
         analytics_node_module,
         "run_analytics_pipeline",
-        lambda objective, findings: [
-            {"metric": "mean", "value": 150.0, "detail": "mean", "entity": None, "inputs": [120.0]}
-        ],
+        lambda objective, findings: (
+            [
+                {
+                    "metric": "mean",
+                    "value": 150.0,
+                    "detail": "mean",
+                    "entity": None,
+                    "inputs": [120.0],
+                }
+            ],
+            None,
+        ),
     )
     state = {"objective": "x", "research_findings": [_GLOBEX_FINDING], "messages": []}
 
@@ -503,3 +512,24 @@ def test_a_submission_is_not_a_result_or_an_audited_tool_call(monkeypatch) -> No
 
 def test_the_prompt_asks_for_a_submission() -> None:
     assert "submit_analysis" in analytics_node_module.SYSTEM_PROMPT
+
+
+def test_the_node_stores_validated_insights_and_reports_drops(monkeypatch) -> None:
+    finding = {"source": "acme.md", "content": "Acme is $55, Initech $15.", "relevance_score": 1.0}
+    result = {"metric": "mean", "value": 35.0, "detail": "d", "inputs": [15.0, 55.0], "id": "r1"}
+    raw = [
+        {"text": "The average seat price is $35.", "result_ids": ["r1"]},
+        {"text": "Acme has 900 staff.", "result_ids": ["r1"]},
+    ]
+    monkeypatch.setattr(
+        analytics_node_module, "run_analytics_pipeline", lambda objective, findings: ([result], raw)
+    )
+    state = {"objective": "x", "research_findings": [finding], "messages": []}
+
+    update = analytics_node_module.analytics_node(state)  # type: ignore[arg-type]
+
+    assert update["analytics_insights"] == [raw[0]]
+    assert [e["rule"] for e in update["guardrail_events"]] == ["ungrounded_insight"]
+    assert update["messages"][0].content.endswith(
+        "1 metric(s) computed via tool calls; 1 insight(s)."
+    )

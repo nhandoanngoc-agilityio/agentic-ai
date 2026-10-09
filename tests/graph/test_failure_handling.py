@@ -60,9 +60,10 @@ def _stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         analytics_node_module,
         "run_analytics_pipeline",
-        lambda objective, findings: [
-            {"metric": "mean", "value": 49.0, "detail": "d", "entity": None, "inputs": [49.0]}
-        ],
+        lambda objective, findings: (
+            [{"metric": "mean", "value": 49.0, "detail": "d", "entity": None, "inputs": [49.0]}],
+            None,
+        ),
     )
     monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
     monkeypatch.setattr(reporting_node_module, "draft_report", lambda *a, **k: "# Report")
@@ -157,10 +158,12 @@ def test_a_transient_failure_is_retried_from_the_failed_step(
     async def _write(filename: str, content: str) -> str:
         return f"reports/{filename}"
 
-    def _analytics(call: int, objective: str, findings: list[Any]) -> list[Any]:
+    def _analytics(call: int, objective: str, findings: list[Any]) -> tuple[list[Any], None]:
         if call == 1:
             raise RateLimitError("429")
-        return [{"metric": "mean", "value": 49.0, "detail": "d", "entity": None, "inputs": [49.0]}]
+        return [
+            {"metric": "mean", "value": 49.0, "detail": "d", "entity": None, "inputs": [49.0]}
+        ], None
 
     research = _counting(
         monkeypatch,

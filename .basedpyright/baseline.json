@@ -420,14 +420,6 @@
         ],
         "./tests/agents/test_supervisor_routing.py": [
             {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 5,
-                    "lineCount": 7
-                }
-            },
-            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 57,
@@ -658,14 +650,6 @@
         ],
         "./tests/checkpointing/test_checkpointing.py": [
             {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 78,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 52,
@@ -699,14 +683,6 @@
             }
         ],
         "./tests/checkpointing/test_checkpointing_postgres.py": [
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 78,
-                    "lineCount": 1
-                }
-            },
             {
                 "code": "reportArgumentType",
                 "range": {
@@ -1018,16 +994,6 @@
                 }
             }
         ],
-        "./tests/graph/test_graph_discard_terminates.py": [
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 78,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./tests/graph/test_input_guard.py": [
             {
                 "code": "reportTypedDictNotRequiredAccess",
@@ -1065,14 +1031,6 @@
             }
         ],
         "./tests/graph/test_run_graph_safety.py": [
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 78,
-                    "lineCount": 1
-                }
-            },
             {
                 "code": "reportOperatorIssue",
                 "range": {

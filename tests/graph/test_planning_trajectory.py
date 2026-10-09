@@ -97,9 +97,10 @@ def _stub_everything_but_the_supervisor_logic(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         analytics_node_module,
         "run_analytics_pipeline",
-        lambda objective, findings: [
-            {"metric": "mean", "value": 49.0, "detail": "mean", "entity": None, "inputs": [49.0]}
-        ],
+        lambda objective, findings: (
+            [{"metric": "mean", "value": 49.0, "detail": "mean", "entity": None, "inputs": [49.0]}],
+            None,
+        ),
     )
     monkeypatch.setattr(reporting_node_module, "get_chat_model", lambda: None)
     monkeypatch.setattr(

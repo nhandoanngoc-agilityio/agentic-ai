@@ -34,8 +34,8 @@ def _fake_research_pipeline(
 
 def _fake_analytics_pipeline(
     objective: str, findings: list[ResearchFinding]
-) -> list[AnalyticsResult]:
-    return [{"metric": "count", "value": float(len(findings)), "detail": "d"}]
+) -> tuple[list[Any], None]:
+    return [{"metric": "count", "value": float(len(findings)), "detail": "d"}], None
 
 
 def _fake_draft_report(
