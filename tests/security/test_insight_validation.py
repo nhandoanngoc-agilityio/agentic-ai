@@ -140,3 +140,48 @@ def test_a_submission_sent_as_a_json_string_is_parsed() -> None:
     insights, events = validate_insights(raw, _RESULTS, _FINDINGS)
 
     assert len(insights) == 1 and not events
+
+
+_GLOBEX: Any = [
+    {"source": "globex.md", "content": "ACV between $150K and $400K.", "relevance_score": 1.0}
+]
+_GLOBEX_RESULTS: Any = [
+    {"metric": "minimum", "value": 150000.0, "detail": "d", "inputs": [150000.0], "id": "r1"},
+    {"metric": "maximum", "value": 400000.0, "detail": "d", "inputs": [400000.0], "id": "r2"},
+]
+
+
+def test_ids_written_into_the_text_are_recovered_and_removed_from_it() -> None:
+    raw = [
+        {
+            "text": "Globex's minimum annual contract value is $150,000 (r1) and maximum "
+            "annual contract value is $400,000 (r2)."
+        }
+    ]
+
+    insights, events = validate_insights(raw, _GLOBEX_RESULTS, _GLOBEX)
+
+    assert insights == [
+        {
+            "text": "Globex's minimum annual contract value is $150,000 and maximum "
+            "annual contract value is $400,000.",
+            "result_ids": ["r1", "r2"],
+        }
+    ]
+    assert events == []
+
+
+def test_an_empty_id_list_also_falls_back_to_ids_in_the_text() -> None:
+    raw = [{"text": "Globex deals start at $150K (from r1).", "result_ids": []}]
+
+    insights, _ = validate_insights(raw, _GLOBEX_RESULTS, _GLOBEX)
+
+    assert insights == [{"text": "Globex deals start at $150K.", "result_ids": ["r1"]}]
+
+
+def test_a_text_citing_no_id_without_result_ids_is_still_dropped() -> None:
+    insights, events = validate_insights(
+        [{"text": "Globex deals start at $150K."}], _GLOBEX_RESULTS, _GLOBEX
+    )
+
+    assert insights == [] and _reasons(events) == ["malformed insight"]

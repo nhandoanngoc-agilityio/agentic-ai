@@ -174,6 +174,10 @@ def ungrounded_inputs(
 
 
 INSIGHT_MAX_CHARS = 300
+# Result IDs a model wrote into an insight's text instead of `result_ids`:
+# "(r1)", "(r1, r2)", "(from r1 and r2)".
+_ID_IN_TEXT = re.compile(r"\br\d+\b")
+_ID_GROUP_IN_TEXT = re.compile(r"\s*\((?:from\s+)?r\d+(?:\s*(?:,|and)\s*r\d+)*\)")
 
 
 def _rounds_from(match: re.Match[str], evidence: set[float]) -> bool:
@@ -228,6 +232,12 @@ def validate_insights(
     for item in raw:
         text = item.get("text") if isinstance(item, dict) else None
         ids = item.get("result_ids") if isinstance(item, dict) else None
+        if isinstance(text, str) and not ids and _ID_IN_TEXT.search(text):
+            # The model cited results in the text instead of `result_ids`:
+            # take the IDs from there and drop the "(r1)" mentions, which a
+            # report reader shouldn't see.
+            ids = _ID_IN_TEXT.findall(text)
+            text = _ID_GROUP_IN_TEXT.sub("", text)
         if not isinstance(text, str) or not text.strip() or not isinstance(ids, list):
             _drop("malformed insight")
             continue

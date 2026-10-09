@@ -494,3 +494,9 @@ itself, so a run that computes until the cap still hands over a summary (not wit
 budget, which would leave nothing to summarise). No model call is added. The prompt tells the model
 to submit an empty list when there is nothing to compute. Both choices are in the version manifest
 (`analytics_tool_choice`).
+
+The run after that change showed the model submitting on every analytics run, but 2 of 6 times
+with the result IDs written into the text ("$150,000 (r1)") and no `result_ids`, which the
+validator dropped as malformed. `validate_insights` now takes the IDs from the text when
+`result_ids` is missing or empty and removes the "(r1)" mentions; the insight then passes the
+same checks as any other. The prompt also says the IDs go in `result_ids`, not in the text.

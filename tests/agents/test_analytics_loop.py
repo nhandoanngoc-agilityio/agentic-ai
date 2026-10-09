@@ -621,3 +621,7 @@ def test_a_single_turn_budget_is_not_forced_to_submit_before_computing() -> None
 
 def test_the_prompt_says_how_to_finish_with_nothing_to_compute() -> None:
     assert "empty list" in analytics_node_module.SYSTEM_PROMPT
+
+
+def test_the_prompt_says_ids_go_in_result_ids() -> None:
+    assert "not in the text" in analytics_node_module.SYSTEM_PROMPT
