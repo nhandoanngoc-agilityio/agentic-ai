@@ -85,6 +85,7 @@ draft awaiting its write are kept.
 | End on error or discard, first research pass, visit cap, finish after the write | Code rules |
 | Stop gathering when the run's token budget is spent, and report what it has | Code rule (`RunPolicy.max_run_tokens`) |
 | Which math tool, with which inputs | The model (Analytics), inputs checked against the findings |
+| Which insights the report is built from | The model (Analytics, `submit_analysis`), each checked by code: real result IDs, grounded figures, at most 5 |
 | Which of two conflicting sources is current | Code: same company and topic, later date, and the newer one states figures (`retrieval/evidence.py`) |
 | Whether the report is written | A person (approval interrupt) |
 | What earlier reviewers asked for, carried into new drafts | Long-term memory (`memory.py`, LangGraph store): reviewer feedback from past runs, sanitized when stored |

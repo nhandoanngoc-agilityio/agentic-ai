@@ -471,3 +471,15 @@ cross-encoder score among the top-4 retrieved chunks, per query:
 
 The gap (relevant ≥ 3.7, off-topic ≤ -10.9) still contains `-8.0`, so
 `rerank_score_floor` stays unchanged.
+
+## 2026-10-09 — Structured analytics handoff (audit 2.3)
+
+Analytics' reasoning used to end in a discarded text reply; Reporting saw only raw tool
+results. Now each result gets an ID (`r1`, `r2`, …) in its tool reply, and the loop ends with a
+`submit_analysis` call carrying up to 5 insights that cite those IDs. It reuses the loop's final
+model call, so no call is added. `validate_insights` drops insights with unknown IDs, text over
+300 characters, or figures current evidence doesn't support (`ungrounded_insight`). Reporting
+renders "Key insights" above "Computed metrics" and is told to build the Analysis section from
+them; without insights the prompt is unchanged. The release gate's analytics cases now require
+at least one grounded insight (`check_insights`), and a reporting case drafts from insights.
+The response cache (off by default) doesn't store insights: a cache hit reports without them.
