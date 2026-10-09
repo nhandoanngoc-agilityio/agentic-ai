@@ -14,10 +14,17 @@ not by a second model call, so this adds no tokens and no measurable latency.
 
 import calendar
 import re
+from typing import Any
 
+from market_research_team.config import settings
 from market_research_team.retrieval.evidence import finding_key, superseded
 from market_research_team.security.patterns import PII_PATTERNS, SECRET_PATTERNS
-from market_research_team.state import AnalyticsResult, GuardrailEvent, ResearchFinding
+from market_research_team.state import (
+    AnalyticsInsight,
+    AnalyticsResult,
+    GuardrailEvent,
+    ResearchFinding,
+)
 
 UNVERIFIED_MARK = " [unverified]"
 OUTDATED_MARK = " [outdated]"
@@ -163,6 +170,72 @@ def ungrounded_inputs(
         for value in inputs
         if abs(value) >= _MIN_CHECKED_VALUE and not _is_grounded(abs(value), known)
     ]
+
+
+INSIGHT_MAX_CHARS = 300
+
+
+def validate_insights(
+    raw: Any, results: list[AnalyticsResult], findings: list[ResearchFinding]
+) -> tuple[list[AnalyticsInsight], list[GuardrailEvent]]:
+    """Keep the insights Analytics may hand Reporting; drop the rest with an
+    `ungrounded_insight` event each.
+
+    An insight must cite at least one real result ID (unknown IDs are
+    removed), fit in INSIGHT_MAX_CHARS (dropped, not cut: a cut can split a
+    claim) and state no figure >= 10 that current evidence doesn't support --
+    the same rule the report's output check applies, so an insight can never
+    vouch for a number the report couldn't state. At most
+    `RunPolicy.max_insights` are kept. Malformed input is dropped, never
+    raised: the model wrote it.
+    """
+
+    events: list[GuardrailEvent] = []
+
+    def _drop(reason: str, text: str = "") -> None:
+        detail = f"{reason}: {text[:80]}" if text else reason
+        events.append({"layer": "tool", "rule": "ungrounded_insight", "detail": detail})
+
+    if not raw:
+        return [], events
+    if not isinstance(raw, list):
+        _drop("malformed submission")
+        return [], events
+
+    known = {rid for result in results if (rid := result.get("id"))}
+    current, _ = _split_current(findings)
+    evidence = _evidence_values(current, results)
+    years = _finding_years(findings)
+    kept: list[AnalyticsInsight] = []
+    for item in raw:
+        text = item.get("text") if isinstance(item, dict) else None
+        ids = item.get("result_ids") if isinstance(item, dict) else None
+        if not isinstance(text, str) or not text.strip() or not isinstance(ids, list):
+            _drop("malformed insight")
+            continue
+        text = text.strip()
+        valid_ids = [rid for rid in ids if isinstance(rid, str) and rid in known]
+        if not valid_ids:
+            _drop("no valid result id", text)
+            continue
+        if len(text) > INSIGHT_MAX_CHARS:
+            _drop("too long", text)
+            continue
+        ungrounded = [
+            match.group(0).strip()
+            for match in _NUMBER_TOKEN.finditer(text)
+            if _token_value(match) >= _MIN_CHECKED_VALUE
+            and not _is_grounded(_token_value(match), evidence)
+            and not _is_source_year(match, years)
+        ]
+        if ungrounded:
+            _drop(f"ungrounded figure {', '.join(ungrounded)}", text)
+            continue
+        if len(kept) >= settings.run_policy.max_insights:
+            _drop("over the limit", text)
+            continue
+        kept.append({"text": text, "result_ids": valid_ids})
+    return kept, events
 
 
 def redact_pii(text: str) -> tuple[str, list[GuardrailEvent]]:

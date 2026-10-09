@@ -194,3 +194,9 @@ def test_the_insight_limit_is_in_the_manifest():
     safety = versioning.build_manifest()["components"]["memory_safety"]
 
     assert safety["max_insights"] == settings.run_policy.max_insights == 5
+
+
+def test_the_insight_length_limit_is_in_the_manifest():
+    safety = versioning.build_manifest()["components"]["memory_safety"]
+
+    assert safety["insight_max_chars"] == 300

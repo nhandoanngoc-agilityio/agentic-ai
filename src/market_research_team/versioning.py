@@ -167,6 +167,7 @@ def _memory_safety() -> dict[str, Any]:
         "memory_store": "postgres" if settings.database_url else "sqlite",
         "max_objective_length": input_validation._MAX_OBJECTIVE_LENGTH,
         "unverified_mark": output_filters.UNVERIFIED_MARK,
+        "insight_max_chars": output_filters.INSIGHT_MAX_CHARS,
         "patterns": {
             name: _digest([(label, regex.pattern) for label, regex in getattr(patterns, name)])
             for name in (
