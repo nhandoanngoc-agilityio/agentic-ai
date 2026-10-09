@@ -75,7 +75,7 @@ class _FakeAnalyticsLLM:
     def __init__(self, responses: list[AIMessage]) -> None:
         self._responses = responses
 
-    def bind_tools(self, _tools: list[object]) -> _FakeToolBoundLLM:
+    def bind_tools(self, _tools: list[object], **_kwargs: object) -> _FakeToolBoundLLM:
         return _FakeToolBoundLLM(self._responses)
 
 

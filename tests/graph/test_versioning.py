@@ -206,3 +206,9 @@ def test_the_submit_tool_schema_is_in_the_manifest():
     analytics = versioning.build_manifest()["components"]["tools"]["analytics"]
 
     assert "submit_analysis" in analytics
+
+
+def test_the_analytics_tool_choice_is_in_the_manifest():
+    safety = versioning.build_manifest()["components"]["memory_safety"]
+
+    assert safety["analytics_tool_choice"] == {"every_turn": "any", "last_turn": "submit_analysis"}

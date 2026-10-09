@@ -483,3 +483,14 @@ renders "Key insights" above "Computed metrics" and is told to build the Analysi
 them; without insights the prompt is unchanged. The release gate's analytics cases now require
 at least one grounded insight (`check_insights`), and a reporting case drafts from insights.
 The response cache (off by default) doesn't store insights: a cache hit reports without them.
+
+### Same day — every analytics turn must call a tool
+
+The first gate runs showed gpt-4o-mini ending 4 of 12 analytics runs with a text reply instead of
+`submit_analysis`, so a third of reports got no insights. The loop now binds the tools with
+`tool_choice="any"` (OpenAI `required`, Anthropic `any`): the model can't end on text, so the only
+way to finish is `submit_analysis`. On the last allowed turn the choice is `submit_analysis`
+itself, so a run that computes until the cap still hands over a summary (not with a one-turn
+budget, which would leave nothing to summarise). No model call is added. The prompt tells the model
+to submit an empty list when there is nothing to compute. Both choices are in the version manifest
+(`analytics_tool_choice`).

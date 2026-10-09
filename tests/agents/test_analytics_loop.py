@@ -17,7 +17,7 @@ class _ScriptedLLM:
     def __init__(self, responses: list[AIMessage]) -> None:
         self._responses = responses
 
-    def bind_tools(self, _tools: list[object]) -> _ScriptedBoundLLM:
+    def bind_tools(self, _tools: list[object], **_kwargs: object) -> _ScriptedBoundLLM:
         return _ScriptedBoundLLM(self._responses)
 
 
@@ -36,8 +36,9 @@ class _RepeatingLLM:
         self._message = message
         self.bound: _RepeatingBoundLLM | None = None
 
-    def bind_tools(self, _tools: list[object]) -> _RepeatingBoundLLM:
-        self.bound = _RepeatingBoundLLM(self._message)
+    def bind_tools(self, _tools: list[object], **_kwargs: object) -> _RepeatingBoundLLM:
+        if self.bound is None:  # one bound model across bindings, so calls add up
+            self.bound = _RepeatingBoundLLM(self._message)
         return self.bound
 
 
@@ -231,7 +232,7 @@ class _CapturingLLM:
     def __init__(self, responses: list[AIMessage]) -> None:
         self.bound = _CapturingBoundLLM(responses)
 
-    def bind_tools(self, _tools: list[object]) -> _CapturingBoundLLM:
+    def bind_tools(self, _tools: list[object], **_kwargs: object) -> _CapturingBoundLLM:
         return self.bound
 
 
@@ -400,7 +401,7 @@ class _RecordingLLM:
         self.bound = _RecordingBoundLLM(responses)
         self.tool_names: list[str] = []
 
-    def bind_tools(self, tools: list[object]) -> _RecordingBoundLLM:
+    def bind_tools(self, tools: list[object], **_kwargs: object) -> _RecordingBoundLLM:
         self.tool_names = [getattr(tool, "name", "") for tool in tools]
         return self.bound
 
@@ -553,3 +554,70 @@ def test_a_failed_call_keeps_its_id_slot_so_later_ids_match_the_call_order() -> 
 
     assert [(r["metric"], r.get("id")) for r in results] == [("mean", "r2")]
     assert raw == [insight]
+
+
+class _ChoiceBoundLLM:
+    def __init__(self, owner: "_ChoiceLLM", tool_choice: object) -> None:
+        self._owner = owner
+        self.tool_choice = tool_choice
+
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
+        self._owner.turn_choices.append(self.tool_choice)
+        return self._owner.responses.pop(0)
+
+
+class _ChoiceLLM:
+    """Records the tool_choice of every binding; one shared script across bindings."""
+
+    def __init__(self, responses: list[AIMessage]) -> None:
+        self.responses = list(responses)
+        self.turn_choices: list[object] = []
+
+    def bind_tools(self, _tools: list[object], **kwargs: object) -> _ChoiceBoundLLM:
+        return _ChoiceBoundLLM(self, kwargs.get("tool_choice"))
+
+
+def test_every_turn_must_call_a_tool() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _ChoiceLLM(
+        [
+            _ai(_call("mean", {"values": [2, 6]}, "a")),
+            _ai(_call("submit_analysis", {"insights": [_INSIGHT]}, "s")),
+        ]
+    )
+
+    _, raw = run_analysis_loop(llm, [mean], "x", [], max_iterations=4)  # type: ignore[arg-type]
+
+    assert llm.turn_choices == ["any", "any"]
+    assert raw == [_INSIGHT]
+
+
+def test_the_last_allowed_turn_must_submit() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _ChoiceLLM(
+        [
+            _ai(_call("mean", {"values": [2, 6]}, "a")),
+            _ai(_call("submit_analysis", {"insights": [_INSIGHT]}, "s")),
+        ]
+    )
+
+    results, raw = run_analysis_loop(llm, [mean], "x", [], max_iterations=2)  # type: ignore[arg-type]
+
+    assert llm.turn_choices == ["any", "submit_analysis"]
+    assert len(results) == 1 and raw == [_INSIGHT]
+
+
+def test_a_single_turn_budget_is_not_forced_to_submit_before_computing() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _ChoiceLLM([_ai(_call("mean", {"values": [2, 6]}, "a"))])
+
+    run_analysis_loop(llm, [mean], "x", [], max_iterations=1)  # type: ignore[arg-type]
+
+    assert llm.turn_choices == ["any"]
+
+
+def test_the_prompt_says_how_to_finish_with_nothing_to_compute() -> None:
+    assert "empty list" in analytics_node_module.SYSTEM_PROMPT

@@ -140,6 +140,13 @@ def _knowledge_static() -> dict[str, Any]:
     }
 
 
+def _analytics_tool_choice() -> dict[str, str]:
+    from market_research_team.agents.analytics import node as analytics
+    from market_research_team.agents.analytics.tools import SUBMIT_TOOL_NAME
+
+    return {"every_turn": analytics.TOOL_CHOICE_EVERY_TURN, "last_turn": SUBMIT_TOOL_NAME}
+
+
 def _memory_safety() -> dict[str, Any]:
     from market_research_team.agents.supervisor import router
     from market_research_team.security import input_validation, output_filters, patterns
@@ -160,6 +167,7 @@ def _memory_safety() -> dict[str, Any]:
         "supervisor_finding_snippet_chars": router._FINDING_SNIPPET_CHARS,
         "max_tool_iterations": settings.run_policy.max_tool_iterations,
         "max_insights": settings.run_policy.max_insights,
+        "analytics_tool_choice": _analytics_tool_choice(),
         "max_review_rounds": settings.run_policy.max_review_rounds,
         "max_self_check_redrafts": settings.run_policy.max_self_check_redrafts,
         "max_run_tokens": settings.run_policy.max_run_tokens,

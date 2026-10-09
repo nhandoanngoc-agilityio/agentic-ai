@@ -36,7 +36,7 @@ def test_the_analytics_loop_reads_its_limit_at_run_time(monkeypatch: pytest.Monk
     class _AlwaysCallsATool:
         calls = 0
 
-        def bind_tools(self, _tools: object) -> "_AlwaysCallsATool":
+        def bind_tools(self, _tools: object, **_kwargs: object) -> "_AlwaysCallsATool":
             return self
 
         def invoke(self, _messages: object, config: object = None) -> AIMessage:
