@@ -50,16 +50,6 @@
                 }
             }
         ],
-        "./scripts/run_graph_cli.py": [
-            {
-                "code": "reportGeneralTypeIssues",
-                "range": {
-                    "startColumn": 40,
-                    "endColumn": 63,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./scripts/show_agent_manifest.py": [
             {
                 "code": "reportOptionalMemberAccess",
@@ -414,32 +404,6 @@
                 "range": {
                     "startColumn": 69,
                     "endColumn": 75,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./tests/agents/test_reporting_pipeline.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 51,
-                    "endColumn": 59,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 63,
-                    "endColumn": 70,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 52,
-                    "endColumn": 60,
                     "lineCount": 1
                 }
             }
@@ -1092,42 +1056,10 @@
         ],
         "./tests/graph/test_response_cache_entry.py": [
             {
-                "code": "reportIndexIssue",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 17,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportIndexIssue",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 17,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportTypedDictNotRequiredAccess",
                 "range": {
                     "startColumn": 11,
                     "endColumn": 40,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportIndexIssue",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 17,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOperatorIssue",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 46,
                     "lineCount": 1
                 }
             }

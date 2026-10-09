@@ -283,10 +283,10 @@ def build(compiled_graph: Any | None = None) -> gr.Blocks:
     """
 
     if compiled_graph is None:
-        from market_research_team.checkpointing.store import get_checkpointer
+        from market_research_team.checkpointing.store import get_checkpointer, get_memory_store
         from market_research_team.graph import build_production_graph
 
-        compiled_graph = build_production_graph(get_checkpointer())
+        compiled_graph = build_production_graph(get_checkpointer(), get_memory_store())
 
     with gr.Blocks(title="Market & Competitor Research Analyst Team") as demo:
         gr.Markdown("# Market & Competitor Research Analyst Team")

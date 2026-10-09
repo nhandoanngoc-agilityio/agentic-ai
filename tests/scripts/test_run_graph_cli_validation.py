@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "run_graph_cli.py"
 
 
@@ -68,6 +70,7 @@ def test_cli_refuses_a_thread_id_that_already_has_a_run(tmp_path: Path) -> None:
         **os.environ,
         "AUDIT_LOG_PATH": str(tmp_path / "audit.jsonl"),
         "CHECKPOINT_DB_PATH": str(db),
+        "MEMORY_DB_PATH": str(tmp_path / "memory.sqlite"),
         "AUTO_PRUNE_ENABLED": "false",
         # Environment beats `.env` in pydantic-settings: an empty URL forces
         # SQLite even when the developer's `.env` points at Postgres.
@@ -89,3 +92,36 @@ def test_cli_refuses_a_thread_id_that_already_has_a_run(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "already has a run" in result.stderr
+
+
+def _run_cli_args(args: list[str], tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "AUDIT_LOG_PATH": str(tmp_path / "audit.jsonl"),
+        "CHECKPOINT_DB_PATH": str(tmp_path / "checkpoints.sqlite"),
+        "MEMORY_DB_PATH": str(tmp_path / "memory.sqlite"),
+        "AUTO_PRUNE_ENABLED": "false",
+        "DATABASE_URL": "",
+        "ANTHROPIC_API_KEY": "invalid",
+        "OPENAI_API_KEY": "invalid",
+        "LANGFUSE_PUBLIC_KEY": "",
+        "LANGFUSE_SECRET_KEY": "",
+    }
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT), *args], capture_output=True, text=True, timeout=30, env=env
+    )
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--retry", "never-ran"], "no failed step to retry"),
+        (["Assess Acme pricing", "--retry", "t"], "--retry takes no objective"),
+        ([], "an objective is required"),
+    ],
+)
+def test_cli_retry_and_objective_rules(tmp_path: Path, args: list[str], message: str) -> None:
+    result = _run_cli_args(args, tmp_path)
+
+    assert result.returncode == 2
+    assert message in result.stderr

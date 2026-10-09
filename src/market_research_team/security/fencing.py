@@ -7,7 +7,8 @@ Shared so the analytics and reporting prompts fence the same way.
 
 FINDINGS_TAG = "retrieved_research_data"
 ANALYTICS_TAG = "computed_analytics"
-_TAGS = (FINDINGS_TAG, ANALYTICS_TAG)
+GUIDANCE_TAG = "reviewer_guidance"
+_TAGS = (FINDINGS_TAG, ANALYTICS_TAG, GUIDANCE_TAG)
 
 
 def escape_closing_tags(text: str) -> str:

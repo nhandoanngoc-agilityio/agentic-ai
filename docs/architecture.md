@@ -384,3 +384,33 @@ torch, `.[dev,prod]`, then `scripts/ci_checks.sh`, which `scripts/ci_local.sh` a
 local pre-push run still matches CI. Runs on every push and pull request, cancels superseded
 runs, and uploads the JUnit report. `versioning.git_sha()` now also reads `GITHUB_SHA`.
 
+## 2026-10-08 — Audit close-out: least privilege, token budget, retry from checkpoint
+
+- **MCP least privilege.** The server process gets an allowlisted environment (PATH, HOME,
+  locale, temp, venv, `REPORTS_DIR`) and the reports directory as its working directory: its
+  settings read `.env` from the working directory, so the project root would have handed it the
+  API keys anyway. The unreviewed `run_reporting_pipeline` was removed; every report write goes
+  through the approval interrupt.
+- **Token budget.** `RunPolicy.max_run_tokens` (50,000; a normal run uses ~14,000; 0 disables).
+  At each supervisor decision a code rule compares the run's tokens so far (the in-process tally
+  `observability.run_usage_so_far`) with the budget and, when spent, routes straight to
+  Reporting with what was gathered; recorded as `policy / token_budget_reached`.
+- **Retry from checkpoint.** The error boundary records `failed_node`.
+  `graph.retry_failed_run(graph, thread_id)` clears the error, writes the state back "as" the
+  step before the failed one (`update_state(..., as_node=...)`, with `next` set when the
+  supervisor's edge has to lead back to it), and continues with `invoke(None)`. A failed report
+  write re-enters after drafting, so the same draft returns to review. CLI: `--retry`.
+
+### Same day — long-term memory: reviewer feedback across runs
+
+Per-run state lives in the checkpointer; `memory.py` adds what outlives a run. A reviewer's
+rejection feedback is stored in the LangGraph store (`SqliteStore` at `data/memory.sqlite`, or
+`PostgresStore` with `DATABASE_URL`; one per process like the checkpointer), and each new draft
+gets the newest notes from other runs (`RunPolicy.max_reviewer_notes`, 5; 0 turns it off),
+fenced as `<reviewer_guidance>` and labelled as preferences, not facts. Notes are sanitized on
+the way in -- injection-like notes refused, PII and secrets redacted on the full text and only
+then capped, which a test caught being done in the wrong order (a key cut at the limit was too
+short to match and its prefix was stored) -- and pruned with the audit log after 90 days.
+Production graphs (CLI, Gradio) are compiled with the store; eval graphs without it, so the
+release gate doesn't depend on what reviewers wrote.
+

@@ -38,6 +38,14 @@ class RunPolicy(BaseModel):
     # review round: a second attempt rarely fixes what the first didn't, and
     # each costs a full drafting call.
     max_self_check_redrafts: int = 1
+    # Model tokens (input + output) one run may spend before it stops
+    # gathering and reports what it has. A normal run uses ~14K, so this is a
+    # bound for a run gone wrong, not a target. 0 disables it. Counted in
+    # this process: a run resumed in another process starts a fresh count.
+    max_run_tokens: int = 50_000
+    # Remembered reviewer notes shown to each new draft (memory.py), newest
+    # first. 0 turns long-term memory off.
+    max_reviewer_notes: int = 5
 
 
 class Settings(BaseSettings):
@@ -96,6 +104,9 @@ class Settings(BaseSettings):
 
     recursion_limit: int = 20
     checkpoint_db_path: Path = _PROJECT_ROOT / "data" / "checkpoints.sqlite"
+    # Long-term memory (memory.py): reviewer feedback kept across runs. Postgres
+    # when `database_url` is set, like the checkpointer.
+    memory_db_path: Path = _PROJECT_ROOT / "data" / "memory.sqlite"
     # Credentials use repr=False so printing settings (or a test failure that
     # shows them) never leaks a secret.
     database_url: str | None = Field(default=None, repr=False)

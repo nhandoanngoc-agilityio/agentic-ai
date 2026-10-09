@@ -124,6 +124,9 @@ class AgentState(TypedDict):
     # straight to `reporting` -- drafting and human approval still always
     # run fresh regardless of this flag.
     from_response_cache: NotRequired[bool]
+    # The step whose exception ended the run (set by the error boundary), so
+    # `graph.retry_failed_run` can re-run just that step from the checkpoint.
+    failed_node: NotRequired[str | None]
     # How many times the supervisor has decided so far in this run. The visit
     # cap reads this rather than counting `messages`, which is a log only.
     supervisor_visits: NotRequired[int]
@@ -144,6 +147,7 @@ def new_run_state(objective: str) -> AgentState:
         "analytics_results": [],
         "report_path": None,
         "error": None,
+        "failed_node": None,
         "report_discarded": False,
         "research_focus": None,
         "research_exhausted": False,

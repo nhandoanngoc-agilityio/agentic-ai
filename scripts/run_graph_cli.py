@@ -6,7 +6,8 @@ report to disk, so this always runs against a checkpointer (SQLite/Postgres
 per `.env`) -- there's no way to resume a paused run otherwise.
 
     python scripts/run_graph_cli.py "Assess Acme vs Globex pricing strategy"
-    python scripts/run_graph_cli.py "..." --thread-id demo-1  # resume a specific thread later
+    python scripts/run_graph_cli.py "..." --thread-id demo-1  # name the run's thread
+    python scripts/run_graph_cli.py --retry demo-1           # re-run the step that failed
 """
 
 import argparse
@@ -15,9 +16,10 @@ from typing import Any
 
 from langgraph.types import Command
 
-from market_research_team.checkpointing.store import get_checkpointer
+from market_research_team.checkpointing.store import get_checkpointer, get_memory_store
 from market_research_team.feedback.retention import maybe_auto_prune
-from market_research_team.graph import build_production_graph, run_graph
+from market_research_team.graph import build_production_graph, retry_failed_run, run_graph
+from market_research_team.guardrails import TRANSIENT_MARK
 from market_research_team.security import audit
 from market_research_team.security.input_validation import validate_objective
 from market_research_team.state import new_run_state
@@ -50,7 +52,13 @@ def _prompt_for_approval(interrupt_value: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("objective", help="Research objective to run the team against.")
+    parser.add_argument("objective", nargs="?", help="Research objective to run the team against.")
+    parser.add_argument(
+        "--retry",
+        metavar="THREAD_ID",
+        default=None,
+        help="Re-run the step that failed in this thread's run, keeping everything before it.",
+    )
     parser.add_argument(
         "--thread-id",
         default=None,
@@ -68,6 +76,15 @@ def main() -> None:
     args = parser.parse_args()
     maybe_auto_prune()  # at most daily; see docs/security.md -> Retention
 
+    if args.retry:
+        if args.objective or args.thread_id:
+            parser.error("--retry takes no objective or --thread-id: it continues that thread")
+        result, compiled_graph = _retry(parser, args.retry, args.recursion_limit)
+        _finish(result, compiled_graph, args.retry, args)
+        return
+    if args.objective is None:
+        parser.error("an objective is required (or --retry THREAD_ID)")
+
     thread_id = args.thread_id or str(uuid.uuid4())
     try:
         objective = validate_objective(args.objective)
@@ -75,7 +92,7 @@ def main() -> None:
         if args.objective.strip():  # an empty objective is not an attempt worth harvesting
             audit.record_input_rejection(thread_id, args.objective, exc)
         parser.error(str(exc))
-    compiled_graph = build_production_graph(get_checkpointer())
+    compiled_graph = build_production_graph(get_checkpointer(), get_memory_store())
     if args.thread_id and _thread_has_run(compiled_graph, thread_id):
         # A fresh run on an old thread would inherit its accumulated state
         # (guardrail events, messages, flags), so refuse rather than mix runs.
@@ -89,6 +106,25 @@ def main() -> None:
         thread_id=thread_id,
         recursion_limit=args.recursion_limit,
     )
+    _finish(result, compiled_graph, thread_id, args)
+
+
+def _retry(
+    parser: argparse.ArgumentParser, thread_id: str, recursion_limit: int | None
+) -> tuple[Any, Any]:
+    compiled_graph = build_production_graph(get_checkpointer(), get_memory_store())
+    error = compiled_graph.get_state({"configurable": {"thread_id": thread_id}}).values.get("error")
+    if error and TRANSIENT_MARK not in error:
+        print(f"note: the failure was not transient ({error}); it may happen again.")
+    try:
+        result = retry_failed_run(compiled_graph, thread_id, recursion_limit=recursion_limit)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return result, compiled_graph
+
+
+def _finish(result: Any, compiled_graph: Any, thread_id: str, args: argparse.Namespace) -> None:
+    """Answer approval prompts until the run ends, then print its outcome."""
 
     while result.get("__interrupt__"):
         decision = _prompt_for_approval(result["__interrupt__"][0].value)

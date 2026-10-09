@@ -104,6 +104,8 @@ def with_error_boundary(
             message = describe_failure(node_name, exc)
             update: dict[str, Any] = {
                 "error": message,
+                # Which step to re-run if the run is retried (graph.retry_failed_run).
+                "failed_node": node_name,
                 "messages": [AIMessage(content=message, name=node_name)],
             }
             if fallback_updates:

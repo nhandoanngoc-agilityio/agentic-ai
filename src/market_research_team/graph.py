@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
+from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
 from market_research_team.agents.analytics.node import analytics_node
@@ -42,7 +43,9 @@ logger = logging.getLogger(__name__)
 StepCallback = Callable[[str, dict[str, Any]], None]
 
 
-def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
+def _build_graph(
+    checkpointer: BaseCheckpointSaver[Any] | None = None, store: BaseStore | None = None
+):
     builder = StateGraph(AgentState)
     builder.add_node(
         "supervisor",
@@ -94,7 +97,7 @@ def _build_graph(checkpointer: BaseCheckpointSaver[Any] | None = None):
         {"reporting": "reporting", "supervisor": "supervisor"},
     )
 
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(checkpointer=checkpointer, store=store)
 
 
 # Exported for `langgraph.json` / `langgraph dev`: no checkpointer baked in,
@@ -108,15 +111,17 @@ if tracing_enabled():
     graph = graph.with_config({"callbacks": [get_langfuse_handler()]})
 
 
-def build_production_graph(checkpointer: BaseCheckpointSaver[Any]):
+def build_production_graph(checkpointer: BaseCheckpointSaver[Any], store: BaseStore | None = None):
     """Compile the graph with a real checkpointer, for standalone use outside
     `langgraph dev` (scripts, a future API wrapper) where nothing else is
-    providing persistence."""
+    providing persistence. `store` is the long-term memory (memory.py); the
+    eval harness passes none, so runs it scores don't depend on what earlier
+    reviewers wrote."""
 
-    return _build_graph(checkpointer=checkpointer)
+    return _build_graph(checkpointer=checkpointer, store=store)
 
 
-def _apply_response_cache(initial_state: AgentState | Command[Any]) -> AgentState | Command[Any]:
+def _apply_response_cache(initial_state: AgentState) -> AgentState:
     """On a fresh (non-resume) run, check the opt-in response cache for an
     exact match on the validated objective. A hit populates
     `research_findings`/`analytics_results` and sets `from_response_cache`
@@ -125,7 +130,7 @@ def _apply_response_cache(initial_state: AgentState | Command[Any]) -> AgentStat
     for `input_guard_node` to reject normally.
     """
 
-    if not settings.response_cache_enabled or not isinstance(initial_state, dict):
+    if not settings.response_cache_enabled:
         return initial_state
 
     try:
@@ -148,7 +153,7 @@ def _apply_response_cache(initial_state: AgentState | Command[Any]) -> AgentStat
 
 
 def run_graph(
-    initial_state: AgentState | Command[Any],
+    initial_state: AgentState | Command[Any] | None,
     *,
     compiled_graph: Any = None,
     thread_id: str | None = None,
@@ -160,7 +165,9 @@ def run_graph(
     per-node error boundaries already produce, instead of letting it
     propagate as a raw exception up to the caller.
 
-    `initial_state` may also be a `Command` (e.g. `Command(resume=...)`) to
+    `initial_state` None continues a checkpointed thread from where its state
+    points (see `retry_failed_run`). It may also be a `Command` (e.g.
+    `Command(resume=...)`) to
     resume a run paused on a human-approval interrupt (see
     `agents/reporting/node.py`) — this requires `compiled_graph` to carry a
     real checkpointer and the same `thread_id` the paused run used. The
@@ -172,7 +179,8 @@ def run_graph(
     than invoked; the returned state is the same either way.
     """
 
-    initial_state = _apply_response_cache(initial_state)
+    if isinstance(initial_state, dict):  # a fresh run, not a resume or a retry
+        initial_state = _apply_response_cache(initial_state)
     target_graph = compiled_graph if compiled_graph is not None else graph
     config: RunnableConfig = {"recursion_limit": recursion_limit or settings.recursion_limit}
     if thread_id is not None:
@@ -217,7 +225,7 @@ def run_graph(
 
 
 def _state_at_failure(
-    target_graph: Any, initial_state: AgentState | Command[Any], config: RunnableConfig
+    target_graph: Any, initial_state: AgentState | Command[Any] | None, config: RunnableConfig
 ) -> dict[str, Any]:
     """The state to report a failed invocation with.
 
@@ -236,7 +244,7 @@ def _state_at_failure(
 
 def _execute(
     target_graph: Any,
-    initial_state: AgentState | Command[Any],
+    initial_state: AgentState | Command[Any] | None,
     config: RunnableConfig,
     on_step: StepCallback | None,
 ) -> dict[str, Any]:
@@ -276,4 +284,56 @@ def _record_run_latency(
     duration_ms = (time.perf_counter() - start) * 1000
     audit.record(
         "run_latency", thread_id, objective=objective, duration_ms=duration_ms, outcome=outcome
+    )
+
+
+# Where a failed step is re-entered: the step to replay the state "as", plus
+# what to set so the edge out of it leads back to the failed step. The
+# supervisor's targets re-run through its conditional edge; a failed report
+# write re-enters after drafting, so the same draft goes back to review.
+_RETRY_FROM: dict[str, tuple[str, dict[str, Any]]] = {
+    "planner": ("input_guard", {}),
+    "supervisor": ("planner", {}),
+    "research": ("supervisor", {"next": "research"}),
+    "analytics": ("supervisor", {"next": "analytics"}),
+    "reporting": ("supervisor", {"next": "reporting"}),
+    "report_review": ("reporting", {}),
+}
+
+
+def retry_failed_run(
+    compiled_graph: Any,
+    thread_id: str,
+    *,
+    recursion_limit: int | None = None,
+    on_step: StepCallback | None = None,
+) -> AgentState:
+    """Re-run the step whose exception ended a checkpointed run, and continue.
+
+    Everything that succeeded is kept -- plan, findings, analytics, a draft
+    awaiting its write -- so a transient failure (a rate limit, a timeout)
+    costs one step, not the whole run. Raises ValueError when the thread has
+    no failed step that can be retried (it finished, was rejected at input,
+    or failed where there is nothing to resume).
+    """
+
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    state = compiled_graph.get_state(config).values  # type: ignore[reportUnknownMemberType]
+    failed = state.get("failed_node")
+    if not state.get("error") or not failed:
+        raise ValueError(f"thread {thread_id!r} has no failed step to retry")
+    if failed not in _RETRY_FROM:
+        raise ValueError(f"a failure in {failed!r} can't be retried; start a new run")
+
+    as_node, route = _RETRY_FROM[failed]
+    compiled_graph.update_state(  # type: ignore[reportUnknownMemberType]
+        config, {"error": None, "failed_node": None, **route}, as_node=as_node
+    )
+    audit.record("run_retried", thread_id, failed_node=failed, error=state["error"])
+    return run_graph(
+        None,
+        compiled_graph=compiled_graph,
+        thread_id=thread_id,
+        recursion_limit=recursion_limit,
+        on_step=on_step,
     )

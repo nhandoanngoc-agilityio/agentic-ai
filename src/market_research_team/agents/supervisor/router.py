@@ -17,9 +17,9 @@ from pydantic import BaseModel, Field, create_model
 
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
-from market_research_team.observability import take_run_usage
+from market_research_team.observability import run_usage_so_far, take_run_usage
 from market_research_team.security import audit
-from market_research_team.state import AgentState, PlanItem, RouteDecision
+from market_research_team.state import AgentState, GuardrailEvent, PlanItem, RouteDecision
 
 # Per-finding snippet length in the supervisor's context. Long enough to hold
 # the figures a chunk states (leaf chunks are up to 800 chars), since the
@@ -120,6 +120,8 @@ class SupervisorRoute(NamedTuple):
     decided_by: DecidedBy = "rule"
     focus_id: str | None = None
     plan: list[PlanItem] | None = None
+    # A harness rule that fired (e.g. the token budget), for the audit trail.
+    guardrail: GuardrailEvent | None = None
 
 
 def _rule(next_step: RouteDecision, why: str) -> SupervisorRoute:
@@ -315,6 +317,19 @@ def decide_route(state: AgentState, llm: BaseChatModel) -> SupervisorRoute:
     if state.get("report_path"):
         return _rule("FINISH", "the report is written")
 
+    budget = settings.run_policy.max_run_tokens
+    if budget:
+        used = run_usage_so_far(audit.current_thread_id())
+        spent = used["input_tokens"] + used["output_tokens"]
+        if spent >= budget:
+            why = f"token budget reached ({spent:,} of {budget:,}): reporting what was gathered"
+            return SupervisorRoute(
+                "reporting",
+                rationale=why,
+                decided_by="rule",
+                guardrail={"layer": "policy", "rule": "token_budget_reached", "detail": why},
+            )
+
     if state.get("supervisor_visits", 0) >= settings.run_policy.max_routing_visits:
         if not state.get("analytics_results"):
             return _rule("analytics", "visit cap reached: moving on to analysis")
@@ -415,6 +430,8 @@ def supervisor_node(state: AgentState) -> dict[str, Any]:
     }
     if route.plan is not None:
         update["plan"] = route.plan
+    if route.guardrail is not None:
+        update["guardrail_events"] = [route.guardrail]
     return update
 
 
