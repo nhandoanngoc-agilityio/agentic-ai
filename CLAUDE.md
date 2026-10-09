@@ -17,6 +17,7 @@ pytest --cov                                 # coverage report; fails under 93%
 scripts/ci_local.sh [--worktree]             # run the GitHub Actions CI job locally on a clean copy before pushing
 python scripts/seed_vectorstore.py           # rebuild Chroma index from data/raw/
 python scripts/run_graph_cli.py "<objective>" [--thread-id id]   # REAL LLM CALLS
+python scripts/run_graph_cli.py --retry <thread-id>                # re-run a failed run's failed step
 python scripts/run_gradio.py                 # launches the Gradio UI
 langgraph dev --no-browser                   # LangGraph Studio on :2024
 python scripts/run_evals.py [--provider openai] [--compare] [--langsmith] [--repeats N] [--update-baseline]   # REAL LLM CALLS
@@ -37,7 +38,8 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
 - Supervisor routing is in `agents/supervisor/router.py` (`decide_route`,
   `route_from_supervisor`). New routes need the conditional-edge map in `graph.py`. The
   `planner` node runs before the first supervisor decision; `tests/conftest.py` stubs
-  `run_planner` with the one-item fallback plan so graph tests stay offline.
+  `run_planner` with the one-item fallback plan so graph tests stay offline, and points the
+  long-term memory store (`memory.py`) at a temp file. Eval graphs are built without a store.
 - A fresh run's input comes from `state.new_run_state()`; a new `AgentState` field must be
   reset there (`tests/graph/test_state.py` fails otherwise).
 - Retrieval code (query rewriting, retriever, reranker) lives in `retrieval/`; the

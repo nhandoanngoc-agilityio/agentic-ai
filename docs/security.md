@@ -22,6 +22,7 @@ no external moderation service, no measurable latency.
 | Harness | Timeout and SDK retries on every model call; timeout on the MCP write | `llm.py`, `agents/reporting/node.py` | A stalled call fails the step; the error is labelled transient and the run ends cleanly |
 | Tool | MCP server writes `.md` only, inside `REPORTS_DIR`, filename <= 128 chars, content <= 256 KB | `mcp_server/fs_server.py` | Tool call errors; nothing written |
 | Tool | An existing report with different content is never replaced unless the caller passes `overwrite=true`; each run writes `<objective slug>-<run id>.md`, so re-running an objective cannot replace an approved report | `mcp_server/fs_server.py`, `agents/reporting/node.py::report_filename` | Tool call errors; the existing report is kept |
+| Tool | The MCP server process gets an allowlisted environment (PATH, HOME, locale, temp, venv, `REPORTS_DIR`) and the reports directory as its working directory, so neither the environment nor a `.env` in reach hands it API keys, `DATABASE_URL` or Langfuse keys. Every report write goes through the human-approval interrupt; there is no unreviewed write path | `agents/reporting/mcp_client.py::server_environment` | n/a (prevention) |
 | Output | PII redaction (email, phone, card, SSN-shaped) | `security/output_filters.py::redact_pii` | Replaced with `[email redacted]` etc.; `output` event |
 | Output | Credential scrub (`sk-`, `sk-ant-`, `lsv2_`, `AKIA`, key=value shapes) | `security/output_filters.py::scrub_secrets` | Replaced with `[secret removed]`; `output` event |
 | Output | Number grounding: every figure >= 10 must match a number in the findings, or the output of an analytics call whose inputs came from the findings, within 1% | `security/output_filters.py::flag_unverified_numbers` | Figure gets ` [unverified]`; warning shown at the approval prompt |
@@ -53,6 +54,10 @@ and applies to both the objective and the retrieved chunks.
   the configured LLM provider (Anthropic or OpenAI) and, if enabled, LangSmith tracing. If
   real customer documents are ever ingested, review the provider's data-retention terms
   and consider disabling `LANGCHAIN_TRACING_V2`.
+- Long-term memory holds reviewers' rejection notes, which later drafts see. A note is
+  checked against the injection patterns (refused if it matches, a `reviewer_note_refused`
+  event), PII- and secret-redacted on the full text, then capped at 500 characters before it
+  is stored, and reaches the drafting prompt fenced as data. Evals run without the store.
 - What stays local: the vector store, checkpoints, reports and the audit log. The audit log
   and checkpoints are pruned automatically (see Retention below); reports are kept until you
   delete them from `reports/`.
@@ -61,9 +66,9 @@ and applies to both the objective and the retrieved chunks.
 
 ## Retention
 
-- `data/audit.jsonl` and checkpoint threads are kept for `AUDIT_RETENTION_DAYS`
-  (default 90). Older audit lines and threads (including runs still paused for
-  approval) are deleted.
+- `data/audit.jsonl`, checkpoint threads and remembered reviewer notes (`data/memory.sqlite`,
+  or the Postgres store) are kept for `AUDIT_RETENTION_DAYS` (default 90). Older audit lines,
+  threads (including runs still paused for approval) and notes are deleted.
 - Pruning runs automatically when the Gradio app or the CLI starts, at most once
   every 24 h (`AUTO_PRUNE_ENABLED=false` turns it off). `python scripts/prune_data.py`
   shows what would be removed; `--apply` deletes.

@@ -139,6 +139,14 @@ def _add_run_usage(thread_id: str | None, input_tokens: int, output_tokens: int)
         totals["output_tokens"] += output_tokens
 
 
+def run_usage_so_far(thread_id: str | None) -> dict[str, int]:
+    """This run's model calls and tokens so far, left in the tally."""
+
+    with _run_usage_lock:
+        usage = dict(_run_usage.get(thread_id, {})) if thread_id else {}
+    return usage or {"model_calls": 0, "input_tokens": 0, "output_tokens": 0}
+
+
 def take_run_usage(thread_id: str | None) -> dict[str, int]:
     """This run's model calls and tokens so far, removed from the tally."""
 

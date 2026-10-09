@@ -220,3 +220,33 @@ def test_an_unanswerable_item_stops_research_and_is_named_in_the_report(
         ("reporting", "rule"),  # analysis is current and the plan is resolved
         ("FINISH", "rule"),
     ]
+
+
+def test_a_run_over_its_token_budget_reports_what_it_has(
+    monkeypatch: pytest.MonkeyPatch,
+    audit_events: list[dict[str, Any]],
+    _stub_everything_but_the_supervisor_logic: list[Any],
+) -> None:
+    """Spending past the budget after the broad pass: no hand-back, no
+    analytics -- straight to the reviewed report, gaps listed."""
+
+    from market_research_team import observability
+    from market_research_team.config import RunPolicy, settings
+
+    monkeypatch.setattr(settings, "run_policy", RunPolicy(max_run_tokens=5000))
+    real_research = research_node_module.run_research_pipeline
+
+    def _expensive_research(objective, focus=None, exclude=frozenset()):
+        observability._add_run_usage("plan-budget", 6000, 0)  # the broad pass was costly
+        return real_research(objective, focus, exclude)
+
+    monkeypatch.setattr(research_node_module, "run_research_pipeline", _expensive_research)
+
+    final, draft = _run([], monkeypatch, audit_events, "plan-budget")
+
+    routes = [e for e in audit_events if e["event"] == "route_decision"]
+    decisions = [(d["next"], d["decided_by"]) for d in routes]
+    assert decisions == [("research", "rule"), ("reporting", "rule"), ("FINISH", "rule")]
+    assert final["report_path"] and not final.get("error")
+    assert "## Open questions" in draft
+    assert any(e["rule"] == "token_budget_reached" for e in final.get("guardrail_events", []))

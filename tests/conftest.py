@@ -43,6 +43,13 @@ def _sqlite_checkpointer(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _memory_store_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Long-term memory (data/memory.sqlite) stays out of the real data/."""
+
+    monkeypatch.setattr(settings, "memory_db_path", tmp_path / "memory.sqlite")
+
+
+@pytest.fixture(autouse=True)
 def _langfuse_env_restored():
     """`observability._client()` exports settings into `os.environ` with
     `setdefault`; without this, keys set by one test (fake or not) would leak

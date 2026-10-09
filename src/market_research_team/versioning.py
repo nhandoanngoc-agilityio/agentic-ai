@@ -79,6 +79,7 @@ def _instructions() -> dict[str, str]:
 
     return {
         "planner": _digest(planner.SYSTEM_PROMPT),
+        "reporting_guidance": _digest(reporting.GUIDANCE_INTRO),
         "supervisor": _digest(router.SYSTEM_PROMPT),
         "query_rewriter": _digest(query_rewriter.SYSTEM_PROMPT),
         "analytics": _digest(analytics.SYSTEM_PROMPT),
@@ -158,6 +159,9 @@ def _memory_safety() -> dict[str, Any]:
         "max_tool_iterations": settings.run_policy.max_tool_iterations,
         "max_review_rounds": settings.run_policy.max_review_rounds,
         "max_self_check_redrafts": settings.run_policy.max_self_check_redrafts,
+        "max_run_tokens": settings.run_policy.max_run_tokens,
+        "max_reviewer_notes": settings.run_policy.max_reviewer_notes,
+        "memory_store": "postgres" if settings.database_url else "sqlite",
         "max_objective_length": input_validation._MAX_OBJECTIVE_LENGTH,
         "unverified_mark": output_filters.UNVERIFIED_MARK,
         "patterns": {
