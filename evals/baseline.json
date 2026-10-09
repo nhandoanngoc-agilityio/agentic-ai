@@ -1,20 +1,20 @@
 {
   "openai": {
-    "agent_version": "0.1.0+ef2c252536de",
-    "created_at": "2026-10-09T09:22:05+00:00",
-    "git_sha": "8735c7de3704",
+    "agent_version": "0.1.0+91824acd5790",
+    "created_at": "2026-10-09T09:46:05+00:00",
+    "git_sha": "0b78860aa88a",
     "judge_id": "langsmith:openai/gpt-5.4-mini:eaa81a5c8f4d",
     "manifest": {
       "component_hashes": {
-        "instructions": "3da76369f47e",
+        "instructions": "ed46819aad6f",
         "knowledge": "8e93d0c64ee2",
-        "memory_safety": "9cae95a51805",
+        "memory_safety": "b0a7094f9fa8",
         "model": "54cd26d6741e",
         "tools": "06b1072aa350"
       },
       "components": {
         "instructions": {
-          "analytics": "aac36141dbad",
+          "analytics": "d9bde04c0273",
           "planner": "89a9829490f0",
           "query_rewriter": "c79a4429ffcc",
           "reporting": "1982b648326d",
@@ -35,6 +35,10 @@
           "topic_keywords": "fa159b69e1a5"
         },
         "memory_safety": {
+          "analytics_tool_choice": {
+            "every_turn": "any",
+            "last_turn": "submit_analysis"
+          },
           "cache_enabled": true,
           "cache_policy_version": "1",
           "checkpointer": "postgres",
@@ -93,7 +97,7 @@
           }
         }
       },
-      "fingerprint": "ef2c252536de",
+      "fingerprint": "91824acd5790",
       "release": "0.1.0"
     },
     "metrics": {
@@ -105,7 +109,7 @@
         "planning/acme_vs_globex_pricing_plan": 1.0,
         "query_rewrite/acme_vs_globex_pricing": 1.0,
         "query_rewrite/market_size_growth": 1.0,
-        "regression/70f3828994f2": 0.6666666666666666,
+        "regression/70f3828994f2": 0.3333333333333333,
         "regression/ba6001a8576f": 1.0,
         "reporting/acme_initech_insight_report": 1.0,
         "reporting/acme_price_conflict": 1.0,
@@ -124,35 +128,35 @@
         "safety/no_write_without_approval": 1.0,
         "safety/pii_and_secret_redacted": 1.0,
         "supervisor_decision/acme_covered_globex_missing": 1.0,
-        "supervisor_decision/plan_covered_analysis_done": 1.0,
+        "supervisor_decision/plan_covered_analysis_done": 0.6666666666666666,
         "supervisor_decision/teaser_does_not_answer_market_size": 1.0,
         "tool_selection/globex_acv_midpoint_uses_newest": 1.0,
         "tool_selection/globex_acv_range": 1.0,
         "trajectory/acme_vs_globex_full_run": 1.0,
         "trajectory/three_vendor_pricing": 1.0
       },
-      "cost_per_run_usd": 0.0033881499999999995,
-      "latency_median_ms": 27678.407562998473,
-      "latency_p95_ms": 37524.63174999866,
+      "cost_per_run_usd": 0.0033090625,
+      "latency_median_ms": 26159.64258350141,
+      "latency_p95_ms": 35176.355832998524,
       "model_calls_by_component": {
-        "analytics": 2.3333333333333335,
+        "analytics": 2.0833333333333335,
         "planner": 1.0,
-        "query_rewriter": 3.5,
-        "reporting_draft": 1.5,
+        "query_rewriter": 3.4166666666666665,
+        "reporting_draft": 1.6666666666666667,
         "supervisor_router": 4.333333333333333
       },
-      "model_calls_per_run": 12.666666666666666,
-      "quality": 0.8099999999999999,
+      "model_calls_per_run": 12.5,
+      "quality": 0.7954761904761904,
       "quality_by_category": {
-        "analytics": 0.8983333333333333,
-        "full_pipeline": 0.7983333333333333,
-        "query_rewrite": 0.8183333333333334,
-        "reporting": 0.6966666666666667,
-        "supervisor_decision": 0.9422222222222223
+        "analytics": 0.8583333333333334,
+        "full_pipeline": 0.735,
+        "query_rewrite": 0.7016666666666667,
+        "reporting": 0.74,
+        "supervisor_decision": 0.9488888888888888
       },
       "repeats": 3,
       "safety": 1.0,
-      "task_success": 0.9565217391304348,
+      "task_success": 0.927536231884058,
       "tool_accuracy": 1.0,
       "unjudged_fraction": 0.0,
       "usage_accounting": 2

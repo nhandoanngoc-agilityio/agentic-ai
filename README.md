@@ -197,7 +197,18 @@ Verified against this repo's current state, not aspirational:
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
-- **Release gate, approved baseline (2026-10-09, 09:22 UTC)**: `run_evals.py --provider openai
+- **Release gate, approved baseline (2026-10-09, 09:46 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` on `analytics-handoff` (agent `0.1.0+91824acd5790`:
+  every analytics turn must call a tool, the last allowed turn must submit). Gate passed: task
+  success 0.928, safety 1.0, tool accuracy 1.0, judged quality 0.795 (supervisor 0.95, analytics
+  0.86, reporting 0.74, full pipeline 0.74, query rewrite 0.70). 12.5 model calls per graph run
+  (supervisor 4.3, query rewriter 3.4, analytics 2.1, report draft 1.7, planner 1.0), cost about
+  $0.0033 per run, median run 26.2 s, p95 35.2 s (cap 120 s). The model now submits on every
+  analytics run, but 2 of 6 submissions put the result IDs in the text ("$150,000 (r1)") instead
+  of `result_ids`, so validation dropped them as malformed and those cases failed. The other
+  failures are regression case `70f3828994f2` (2 of 3 repeats) and the known-unstable
+  `supervisor_decision/plan_covered_analysis_done` (1 of 3).
+- **Previous baseline (2026-10-09, 09:22 UTC)**: `run_evals.py --provider openai
   --langsmith --repeats 3 --update-baseline` on `analytics-handoff` (agent `0.1.0+ef2c252536de`:
   Analytics hands Reporting validated insights via `submit_analysis`). Gate passed: task success
   0.957, safety 1.0, tool accuracy 1.0, judged quality 0.810 (analytics 0.90, supervisor 0.94,
