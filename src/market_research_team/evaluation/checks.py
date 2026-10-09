@@ -158,6 +158,42 @@ def check_inputs_grounded(
     return not invented, f"ungrounded tool inputs: {invented or 'none'}"
 
 
+def check_inputs_current(
+    results: list[AnalyticsResult], findings: list[ResearchFinding]
+) -> tuple[bool, str]:
+    """Passes if no tool input came only from a finding a newer source
+    superseded: the model computed from the current figures."""
+
+    from market_research_team.agents.analytics.node import tool_input_events
+
+    stale = [
+        event["detail"]
+        for event in tool_input_events(results, findings)
+        if event["rule"] == "stale_tool_input"
+    ]
+    return not stale, f"outdated tool inputs: {stale or 'none'}"
+
+
+def check_freshness(report: str, findings: list[ResearchFinding]) -> tuple[bool, str]:
+    """Passes if every figure only an outdated source supports is labelled in
+    its own sentence (see `output_filters.is_labelled_outdated`)."""
+
+    from market_research_team.security.output_filters import (
+        figures_only_outdated_sources_support,
+        is_labelled_outdated,
+        outdated_dates,
+    )
+
+    if not outdated_dates(findings):
+        return True, "no conflicting sources"
+    unlabelled = [
+        figure
+        for figure, sentence in figures_only_outdated_sources_support(report, findings)
+        if not is_labelled_outdated(sentence, findings)
+    ]
+    return not unlabelled, f"unlabelled outdated figures: {unlabelled or 'none'}"
+
+
 _TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", re.MULTILINE)
 
 

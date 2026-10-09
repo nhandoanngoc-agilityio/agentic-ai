@@ -1,7 +1,14 @@
+from typing import Any
+
+import pytest
+
 from market_research_team.security.output_filters import (
+    OUTDATED_MARK,
     UNVERIFIED_MARK,
     apply_output_guardrails,
+    figures_only_outdated_sources_support,
     flag_unverified_numbers,
+    is_labelled_outdated,
     redact_pii,
     scrub_secrets,
     ungrounded_inputs,
@@ -140,3 +147,105 @@ def test_a_result_computed_from_grounded_inputs_is_evidence() -> None:
 def test_ungrounded_inputs_ignores_small_numbers_and_tolerates_rounding() -> None:
     # 3 (periods) is under the checked floor; 400,001 is within 1% of 400K; 85M is invented.
     assert ungrounded_inputs([3.0, 400001.0, 85_000_000.0], _findings()) == [85_000_000.0]
+
+
+_OLD: Any = {
+    "source": "acme.md",
+    "content": "Starter $49 per seat, 14-day trial.",
+    "relevance_score": 1.0,
+    "entity": "Acme",
+    "topic": "pricing",
+    "as_of": "2026-03",
+}
+_NEW: Any = {**_OLD, "source": "bench.md", "content": "Starter $55 per seat, 14-day trial."}
+_NEW["as_of"] = "2026-08"
+
+
+def test_a_figure_only_an_outdated_source_supports_is_marked() -> None:
+    annotated, events = flag_unverified_numbers("Acme charges $49 per seat.", [_OLD, _NEW], [])
+
+    assert OUTDATED_MARK.strip() in annotated
+    assert UNVERIFIED_MARK.strip() not in annotated
+    assert [e["rule"] for e in events] == ["stale_figure"]
+
+
+def test_a_figure_in_both_a_current_and_an_outdated_source_is_current() -> None:
+    annotated, events = flag_unverified_numbers("A 14-day trial at $55.", [_OLD, _NEW], [])
+
+    assert annotated == "A 14-day trial at $55."
+    assert events == []
+
+
+def test_undated_findings_never_produce_outdated_marks() -> None:
+    old = {k: v for k, v in _OLD.items() if k != "as_of"}
+
+    annotated, events = flag_unverified_numbers("$49 and $55.", [old, _NEW], [])  # type: ignore[list-item]
+
+    assert OUTDATED_MARK not in annotated
+    assert events == []
+
+
+def test_a_result_computed_from_an_outdated_input_is_not_evidence() -> None:
+    stale_mean: Any = [{"metric": "mean", "value": 49.0, "detail": "mean([49])", "inputs": [49.0]}]
+
+    annotated, _ = flag_unverified_numbers("Mean $49.", [_OLD, _NEW], stale_mean)
+
+    assert OUTDATED_MARK in annotated
+
+
+def test_citing_a_source_date_is_not_an_unverified_figure() -> None:
+    annotated, events = flag_unverified_numbers("As of 2026-08 Acme charges $55.", [_OLD, _NEW], [])
+
+    assert annotated == "As of 2026-08 Acme charges $55."
+    assert events == []
+
+
+def test_outdated_figures_are_reported_with_their_sentence() -> None:
+    found = figures_only_outdated_sources_support(
+        "Acme now charges $55. Previously it was $49.", [_OLD, _NEW]
+    )
+
+    assert found == [("$49", "Previously it was $49.")]
+
+
+def test_a_source_year_does_not_ground_figures_near_it() -> None:
+    annotated, events = flag_unverified_numbers("Acme has 2,040 customers.", [_OLD, _NEW], [])
+
+    assert UNVERIFIED_MARK.strip() in annotated
+    assert [e["rule"] for e in events] == ["unverified_numbers"]
+
+
+def test_a_source_year_does_not_ground_tool_inputs() -> None:
+    assert ungrounded_inputs([2040.0, 2026.0], [_OLD, _NEW]) == [2040.0, 2026.0]
+
+
+def test_an_old_figure_the_report_labels_as_outdated_is_left_alone() -> None:
+    text = "Acme charges $55. The earlier price was $49 (as of 2026-03)."
+
+    annotated, events = flag_unverified_numbers(text, [_OLD, _NEW], [])
+
+    assert annotated == text
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("sentence", "labelled"),
+    [
+        ("Acme raised the Starter price from $49 to $55.", True),
+        ("Now $55, up from $49.", True),
+        ("The price increased from $49.", True),
+        ("Price range (historical): $49 to $55.", True),
+        ("Starter was $49 in March 2026.", True),
+        ("Starter was $49 (as of 2026-03).", True),
+        ("Minimum price per seat: $49.", False),
+        ("Acme charges $49 in 2026.", False),  # a current source shares that year
+    ],
+)
+def test_ways_a_report_can_label_an_old_figure(sentence: str, labelled: bool) -> None:
+    assert is_labelled_outdated(sentence, [_OLD, _NEW]) is labelled
+
+
+def test_the_old_year_alone_labels_a_figure_when_no_current_source_shares_it() -> None:
+    old: Any = {**_OLD, "as_of": "2024-11"}
+
+    assert is_labelled_outdated("In 2024 it was $49.", [old, _NEW])

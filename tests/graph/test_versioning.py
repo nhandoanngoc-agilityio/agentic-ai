@@ -166,3 +166,25 @@ def test_diff_manifests_tolerates_an_old_manifest_missing_a_component():
     lines = versioning.diff_manifests(before, after)
 
     assert any(line.startswith("instructions: None -> ") for line in lines)
+
+
+def test_the_topic_keyword_map_is_part_of_the_knowledge_component():
+    knowledge = versioning.build_manifest()["components"]["knowledge"]
+
+    assert knowledge["topic_keywords"]
+
+
+def test_prompts_no_longer_claim_the_documents_are_undated_or_narrow():
+    from market_research_team.agents.planner import node as planner
+    from market_research_team.retrieval import query_rewriter
+
+    assert "carry no report dates" not in query_rewriter.SYSTEM_PROMPT
+    assert "dated documents" in planner.SYSTEM_PROMPT
+    assert "do not cover" not in planner.SYSTEM_PROMPT
+
+
+def test_the_planner_is_told_not_to_tie_sub_questions_to_a_source():
+    from market_research_team.agents.planner import node as planner
+
+    assert "never name a document" in planner.SYSTEM_PROMPT
+    assert "customer-review digest" not in planner.SYSTEM_PROMPT

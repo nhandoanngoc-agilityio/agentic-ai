@@ -347,3 +347,26 @@ def test_every_analytics_tool_accepts_an_optional_label() -> None:
     for analytics_tool in ANALYTICS_TOOLS:
         properties = analytics_tool.args_schema.model_json_schema()["properties"]  # type: ignore[union-attr]
         assert "label" in properties, analytics_tool.name
+
+
+def test_findings_context_leaves_out_superseded_findings() -> None:
+    old = {"source": "acme.md", "content": "Starter $49.", "relevance_score": 1.0}
+    old |= {"entity": "Acme", "topic": "pricing", "as_of": "2026-03"}
+    new = {**old, "source": "bench.md", "content": "Starter $55.", "as_of": "2026-08"}
+
+    context = analytics_node_module._findings_to_context([old, new])  # type: ignore[list-item]
+
+    # A superseded figure is never computed from, so analytics doesn't see it.
+    assert "$49" not in context
+    assert "[bench.md · Acme · pricing · as of 2026-08] Starter $55." in context
+
+
+def test_an_input_only_an_outdated_source_supports_is_flagged() -> None:
+    old = {"source": "acme.md", "content": "Starter $49.", "relevance_score": 1.0}
+    old |= {"entity": "Acme", "topic": "pricing", "as_of": "2026-03"}
+    new = {**old, "source": "bench.md", "content": "Starter $55.", "as_of": "2026-08"}
+    results = [{"metric": "mean", "value": 49.0, "detail": "mean([49])", "inputs": [49.0]}]
+
+    events = analytics_node_module.tool_input_events(results, [old, new])  # type: ignore[arg-type]
+
+    assert [e["rule"] for e in events] == ["stale_tool_input"]

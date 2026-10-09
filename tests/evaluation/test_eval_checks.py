@@ -231,3 +231,41 @@ def test_check_trajectory_fails_without_a_plan() -> None:
     from market_research_team.evaluation.checks import check_trajectory
 
     assert "no plan" in check_trajectory([], _GOOD_ROUTE, "")[1]
+
+
+_OLD = {
+    "source": "acme.md",
+    "content": "Starter $49.",
+    "relevance_score": 1.0,
+    "entity": "Acme",
+    "topic": "pricing",
+    "as_of": "2026-03",
+}
+_NEW = {**_OLD, "source": "bench.md", "content": "Starter $55.", "as_of": "2026-08"}
+
+
+@pytest.mark.parametrize(
+    ("report", "passed"),
+    [
+        ("Acme charges $55 per seat.", True),
+        ("Acme charges $55. The outdated price was $49.", True),
+        ("Acme charges $55; in 2026-03 it was $49.", True),
+        ("Acme charges $49 per seat.", False),
+    ],
+)
+def test_check_freshness_requires_older_figures_to_be_labelled(report: str, passed: bool) -> None:
+    ok, detail = checks.check_freshness(report, [_OLD, _NEW])  # type: ignore[list-item]
+
+    assert ok is passed, detail
+
+
+def test_check_freshness_is_a_no_op_without_conflicts() -> None:
+    assert checks.check_freshness("Anything $49.", [_OLD]) == (True, "no conflicting sources")  # type: ignore[list-item]
+
+
+def test_check_inputs_current_flags_outdated_inputs() -> None:
+    stale = [{"metric": "mean", "value": 49.0, "detail": "mean([49])", "inputs": [49.0]}]
+    fresh = [{"metric": "mean", "value": 55.0, "detail": "mean([55])", "inputs": [55.0]}]
+
+    assert not checks.check_inputs_current(stale, [_OLD, _NEW])[0]  # type: ignore[arg-type]
+    assert checks.check_inputs_current(fresh, [_OLD, _NEW])[0]  # type: ignore[arg-type]

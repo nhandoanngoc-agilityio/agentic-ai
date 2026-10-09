@@ -320,3 +320,45 @@ def test_a_reviewer_s_feedback_is_kept_in_the_self_check_redraft(monkeypatch) ->
     assert notes[0] == "Add a pricing table."
     assert notes[1] is not None
     assert notes[1].startswith("Add a pricing table.\n") and "$85M" in notes[1]
+
+
+_DATED_OLD = {
+    "source": "acme.md",
+    "content": "Starter $49.",
+    "relevance_score": 1.0,
+    "entity": "Acme",
+    "topic": "pricing",
+    "as_of": "2026-03",
+}
+_DATED_NEW = {**_DATED_OLD, "source": "bench.md", "content": "Starter $55.", "as_of": "2026-08"}
+
+
+def test_findings_section_shows_provenance_and_supersession() -> None:
+    section = reporting_node_module._findings_section([_DATED_OLD, _DATED_NEW])  # type: ignore[list-item]
+
+    assert (
+        "- (acme.md · Acme · pricing · as of 2026-03 (superseded by bench.md)) Starter $49."
+        in section
+    )
+    assert "- (bench.md · Acme · pricing · as of 2026-08) Starter $55." in section
+
+
+def test_findings_section_is_unchanged_for_undated_findings() -> None:
+    section = reporting_node_module._findings_section([_FINDING])  # type: ignore[list-item]
+
+    assert section == "- (competitor_acme.md) Acme prices at $49/seat."
+
+
+def test_the_report_prompt_prefers_the_newest_source() -> None:
+    assert "use the newest" in reporting_node_module.SYSTEM_PROMPT
+
+
+def test_a_stale_figure_also_triggers_the_self_check(monkeypatch) -> None:
+    notes = _drafting(monkeypatch, ["Acme charges $49.", "Acme charges $55."])
+
+    state = _review_state(research_findings=[_DATED_OLD, _DATED_NEW], analytics_results=[])
+
+    update = reporting_node_module.reporting_node(state)  # type: ignore[arg-type]
+
+    assert len(notes) == 2 and "$49" in (notes[1] or "")
+    assert [e["rule"] for e in update["guardrail_events"]] == ["self_check_redraft"]

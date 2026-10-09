@@ -1,3 +1,8 @@
+---
+entity: Globex
+doc_type: competitor_profile
+as_of: 2026-03
+---
 # Globex Insight — Competitor Profile
 
 ## Company Overview

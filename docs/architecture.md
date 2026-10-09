@@ -414,3 +414,60 @@ short to match and its prefix was stored) -- and pruned with the audit log after
 Production graphs (CLI, Gradio) are compiled with the store; eval graphs without it, so the
 release gate doesn't depend on what reviewers wrote.
 
+
+## 2026-10-08 — Dated corpus and source freshness
+
+The corpus grew from 3 to 12 documents, and documents now carry dates, so two
+sources can disagree and one of them is out of date.
+
+- **Header.** Each file in `data/raw/` starts with a `---` block: `entity`
+  (a company, `Market`, or `Multiple`), `doc_type` and `as_of` (`YYYY-MM`).
+  `ingestion/loaders.py::parse_front_matter` strips it into metadata; a missing
+  or malformed field is dropped and the document behaves as undated.
+- **Topic and entity per chunk.** `retrieval/evidence.py` gives each chunk a topic
+  from its deepest matching heading (pricing, customers, headcount, market_size,
+  strengths, weaknesses, recent_moves, else other). In a `Multiple` document a
+  vendor sub-heading equal to a profile's entity attributes the chunk to that
+  company; anything else is `Market`.
+- **Supersession.** A finding is superseded when another finding about the same
+  entity and topic has a later `as_of` and states a figure of its own. Undated
+  findings, topic `other` and equal dates never supersede. A newer section with no
+  figures (the forecast teaser) can't hide real numbers.
+- **Where it shows.** Prompts label findings `source · entity · topic · as of
+  YYYY-MM (superseded by X)`; the supervisor keeps the bare source in brackets so
+  coverage citations still match. Figures only a superseded finding supports get
+  ` [outdated]` (`stale_figure`, also a self-check trigger); analytics inputs from
+  them raise `stale_tool_input`. A figure the report itself labels as outdated (or
+  with the older date) is left alone. A bare number exactly equal to a finding's
+  year is read as a date, so "as of 2026-03" isn't flagged; the year is never added
+  to the evidence set, which would ground every figure within 1% of it.
+- **Evals.** `check_freshness` (an older figure must be labelled outdated/previous
+  or with its date) runs on every reporting case; `check_inputs_current` on every
+  analytics case. New cases: two retrieval, two reporting conflicts, one analytics,
+  one supervisor (the teaser doesn't answer market size), one full pipeline.
+- **Corpus test.** `tests/ingestion/test_corpus.py` fails if any figure other than
+  Acme's $49 and Globex's $120K/$350K is left stale, so a new document must restate
+  every figure of a section it supersedes.
+
+### Reseeded corpus and rerank floor
+
+Reseeding the 12-document corpus gives 66 sections and 70 leaf chunks. Best
+cross-encoder score among the top-4 retrieved chunks, per query:
+
+| Query | Kind | Best score | Best source |
+|---|---|---|---|
+| Acme Starter price per seat | relevant | 9.83 | pricing_benchmark_2026.md |
+| Initech pricing plans | relevant | 7.39 | competitor_initech.md |
+| Globex annual contract value | relevant | 9.99 | competitor_globex.md |
+| embedded analytics trends | relevant | 4.81 | analyst_note_embedded_bi.md |
+| BI market size and growth | relevant | 5.88 | market_overview.md |
+| Hooli customers | relevant | 6.09 | competitor_hooli.md |
+| Vandelay freight KPIs | relevant | 3.68 | competitor_vandelay.md |
+| Umbrella viewer pricing | relevant | 8.49 | competitor_umbrella.md |
+| best pizza in Naples | off-topic | -11.18 | — |
+| how to train a puppy | off-topic | -11.25 | — |
+| football world cup winners | off-topic | -10.88 | — |
+| symptoms of the flu | off-topic | -11.22 | — |
+
+The gap (relevant ≥ 3.7, off-topic ≤ -10.9) still contains `-8.0`, so
+`rerank_score_floor` stays unchanged.

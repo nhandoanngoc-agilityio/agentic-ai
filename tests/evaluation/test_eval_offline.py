@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage
 from market_research_team import graph as graph_module
 from market_research_team.config import settings
 from market_research_team.evaluation import offline_eval
+from market_research_team.evaluation.golden_dataset import FULL_PIPELINE_CASES
 from market_research_team.evaluation.offline_eval import (
     evaluate_analytics,
     evaluate_full_pipeline,
@@ -170,13 +171,16 @@ def test_supervisor_cases_have_one_right_answer() -> None:
 
     # On the covered plan a "research" answer is overridden by rule (nothing
     # left to research) and reaches reporting, so both cases pass.
+    # In the teaser case q2 is the market-size gap, so researching it is right.
     assert _supervisor_results(_supervisor_answering("research", "q2")) == {
         "acme_covered_globex_missing": True,
         "plan_covered_analysis_done": True,
+        "teaser_does_not_answer_market_size": True,
     }
     assert _supervisor_results(_supervisor_answering("reporting")) == {
         "acme_covered_globex_missing": False,
         "plan_covered_analysis_done": True,
+        "teaser_does_not_answer_market_size": False,
     }
     assert not any(_supervisor_results(_FakeSupervisorLLM("analytics")).values())
 
@@ -504,6 +508,48 @@ def test_evaluate_full_pipeline_adds_a_trajectory_result_from_the_audit_log(
 
     results = evaluate_full_pipeline("fake-provider")
 
-    (trajectory,) = [r for r in results if r.category == "trajectory"]
-    assert trajectory.passed, trajectory.detail
-    assert "research(rule) -> reporting(llm) -> FINISH(rule)" in trajectory.detail
+    trajectories = [r for r in results if r.category == "trajectory"]
+    assert len(trajectories) == len(FULL_PIPELINE_CASES)
+    for trajectory in trajectories:
+        assert trajectory.passed, trajectory.detail
+        assert "research(rule) -> reporting(llm) -> FINISH(rule)" in trajectory.detail
+
+
+def test_conflict_reporting_cases_fail_an_unlabelled_old_figure() -> None:
+    body = "Acme charges $55. Globex runs $150K to $400K."
+    labelled = f"# Objective\nx\n# Findings\n{body} Formerly $49, $120K to $350K.\n# Analysis\ny"
+    unlabelled = f"# Objective\nx\n# Findings\n{body} Also $49, $120K to $350K.\n# Analysis\ny"
+
+    good = {r.case_name: r for r in evaluate_reporting(_FakeReportingLLM(labelled), "p")}  # type: ignore[arg-type]
+    bad = {r.case_name: r for r in evaluate_reporting(_FakeReportingLLM(unlabelled), "p")}  # type: ignore[arg-type]
+
+    for name in ("acme_price_conflict", "globex_acv_conflict"):
+        assert good[name].passed, good[name].detail
+        assert not bad[name].passed
+        assert "unlabelled outdated figures" in bad[name].detail
+
+
+def test_golden_dataset_has_the_freshness_cases() -> None:
+    from market_research_team.evaluation import golden_dataset as gd
+
+    names = {
+        case.name
+        for cases in (
+            gd.RETRIEVAL_CASES,
+            gd.REPORTING_CASES,
+            gd.ANALYTICS_CASES,
+            gd.SUPERVISOR_DECISION_CASES,
+            gd.FULL_PIPELINE_CASES,
+        )
+        for case in cases
+    }
+
+    assert {
+        "initech_pricing_retrieval",
+        "embedded_analytics_trends_retrieval",
+        "acme_price_conflict",
+        "globex_acv_conflict",
+        "globex_acv_midpoint_uses_newest",
+        "teaser_does_not_answer_market_size",
+        "three_vendor_pricing",
+    } <= names

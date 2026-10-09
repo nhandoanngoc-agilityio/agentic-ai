@@ -73,6 +73,8 @@ def reporting_checks(report: str, case: ReportingCase) -> tuple[bool, str]:
     sections_passed, sections_detail = checks.check_contains_all(report, case.required_sections)
     facts_passed, facts_detail = checks.check_contains_all(report, case.required_facts)
     passed, detail = sections_passed and facts_passed, f"{sections_detail}; {facts_detail}"
+    fresh_passed, fresh_detail = checks.check_freshness(report, case.findings)
+    passed, detail = passed and fresh_passed, f"{detail}; {fresh_detail}"
     if case.require_table:
         table_passed, table_detail = checks.check_markdown_table(report)
         passed, detail = passed and table_passed, f"{detail}; {table_detail}"
@@ -215,8 +217,9 @@ def evaluate_analytics(
             outputs, case.plausible_values, case.tolerance
         )
         inputs_passed, inputs_detail = checks.check_inputs_grounded(outputs, case.findings)
-        passed = count_passed and value_passed and inputs_passed
-        detail = f"{count_detail}; {value_detail}; {inputs_detail}"
+        current_passed, current_detail = checks.check_inputs_current(outputs, case.findings)
+        passed = count_passed and value_passed and inputs_passed and current_passed
+        detail = f"{count_detail}; {value_detail}; {inputs_detail}; {current_detail}"
         score, judge_note = _safe_judge(
             judge_llm, lambda: judges.judge_analytics(case.findings, outputs, judge_llm)
         )
