@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from market_research_team.config import settings
 from market_research_team.feedback.regressions import RegressionEntry, load_regressions
-from market_research_team.state import AnalyticsResult, PlanItem, ResearchFinding
+from market_research_team.state import AnalyticsInsight, AnalyticsResult, PlanItem, ResearchFinding
 
 # Verbatim from data/raw/, shared by the supervisor, reporting and safety cases.
 _ACME_PRICING: ResearchFinding = {
@@ -165,6 +165,8 @@ class ReportingCase:
     # that a "add a table" request was acted on.
     feedback: str | None = None
     require_table: bool = False
+    # Analytics' validated insights handed to the draft (empty = none).
+    insights: list[AnalyticsInsight] = field(default_factory=list)
 
 
 @dataclass
@@ -356,6 +358,39 @@ REPORTING_CASES: list[ReportingCase] = [
         findings=[_GLOBEX_PRICING_DATED, _GLOBEX_PRICING_2024],
         results=[],
         required_facts=["150", "400"],
+    ),
+    # The draft gets Analytics' insights: the Analysis section should be built
+    # from them, with the figures the computed metrics give.
+    ReportingCase(
+        name="acme_initech_insight_report",
+        objective="Compare Acme's and Initech's per-seat pricing",
+        findings=[
+            _ACME_PRICING_BENCHMARK,
+            {
+                "source": "competitor_initech.md",
+                "content": "The Team plan costs $15 per seat per month.",
+                "relevance_score": 3.8,
+            },
+        ],
+        results=[
+            {
+                "metric": "percent_change",
+                "value": 266.67,
+                "detail": "percent_change(start_value=15, end_value=55) = 266.67",
+                "entity": None,
+                "inputs": [15.0, 55.0],
+                "label": "Acme vs Initech seat price",
+                "id": "r1",
+            }
+        ],
+        insights=[
+            {
+                "text": "Acme's Starter seat costs about 266.67% more than Initech's Team plan "
+                "($55 vs $15).",
+                "result_ids": ["r1"],
+            }
+        ],
+        required_facts=["55", "15"],
     ),
 ]
 

@@ -269,3 +269,16 @@ def test_check_inputs_current_flags_outdated_inputs() -> None:
 
     assert not checks.check_inputs_current(stale, [_OLD, _NEW])[0]  # type: ignore[arg-type]
     assert checks.check_inputs_current(fresh, [_OLD, _NEW])[0]  # type: ignore[arg-type]
+
+
+def test_check_insights_needs_one_grounded_insight() -> None:
+    insight = [{"text": "A.", "result_ids": ["r1"]}]
+    ungrounded = [
+        {"layer": "tool", "rule": "ungrounded_insight", "detail": "ungrounded figure 900: x"}
+    ]
+    too_long = [{"layer": "tool", "rule": "ungrounded_insight", "detail": "too long: x"}]
+
+    assert checks.check_insights(insight, [])[0]  # type: ignore[arg-type]
+    assert not checks.check_insights([], [])[0]
+    assert not checks.check_insights(insight, ungrounded)[0]  # type: ignore[arg-type]
+    assert checks.check_insights(insight, too_long)[0]  # type: ignore[arg-type]

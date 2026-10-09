@@ -13,7 +13,7 @@ from typing import Any, Literal
 from langchain_core.language_models import BaseChatModel
 from langsmith import Client, evaluate
 
-from market_research_team.agents.analytics.node import run_tool_calling_loop
+from market_research_team.agents.analytics.node import run_analysis_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.reporting.node import draft_report
 from market_research_team.agents.supervisor.router import decide_route
@@ -33,6 +33,7 @@ from market_research_team.evaluation.judges import (
 from market_research_team.evaluation.judges import judge_report
 from market_research_team.llm import get_chat_model
 from market_research_team.retrieval.query_rewriter import rewrite_and_expand
+from market_research_team.security.output_filters import validate_insights
 from market_research_team.state import AgentState
 from market_research_team.versioning import trace_metadata
 
@@ -202,8 +203,9 @@ def _analytics_examples() -> list[dict[str, Any]]:
 
 
 def target_analytics(inputs: dict[str, Any], *, llm: BaseChatModel) -> dict[str, Any]:
-    results = run_tool_calling_loop(llm, ANALYTICS_TOOLS, inputs["objective"], inputs["findings"])
-    return {"results": results}
+    results, raw = run_analysis_loop(llm, ANALYTICS_TOOLS, inputs["objective"], inputs["findings"])
+    insights, events = validate_insights(raw, results, inputs["findings"])
+    return {"results": results, "insights": insights, "insight_events": events}
 
 
 def deterministic_evaluator_analytics(run: Any, example: Any) -> dict[str, Any]:
@@ -221,12 +223,13 @@ def deterministic_evaluator_analytics(run: Any, example: Any) -> dict[str, Any]:
     current_passed, current_detail = checks.check_inputs_current(
         results, (example.inputs or {}).get("findings", [])
     )
-    passed = count_passed and value_passed and inputs_passed and current_passed
-    return {
-        "key": "deterministic",
-        "score": 1.0 if passed else 0.0,
-        "comment": f"{count_detail}; {value_detail}; {inputs_detail}; {current_detail}",
-    }
+    outputs = run.outputs or {}
+    insight_passed, insight_detail = checks.check_insights(
+        outputs.get("insights", []), outputs.get("insight_events", [])
+    )
+    passed = count_passed and value_passed and inputs_passed and current_passed and insight_passed
+    comment = f"{count_detail}; {value_detail}; {inputs_detail}; {current_detail}; {insight_detail}"
+    return {"key": "deterministic", "score": 1.0 if passed else 0.0, "comment": comment}
 
 
 def llm_judge_analytics(run: Any, example: Any, *, llm: BaseChatModel) -> dict[str, Any]:
@@ -244,6 +247,7 @@ def _reporting_examples() -> list[dict[str, Any]]:
                 "findings": case.findings,
                 "results": case.results,
                 "feedback": case.feedback,
+                "insights": case.insights,
             },
             "outputs": {
                 "required_sections": case.required_sections,
@@ -262,6 +266,7 @@ def target_reporting(inputs: dict[str, Any], *, llm: BaseChatModel) -> dict[str,
         inputs["results"],
         llm,
         feedback=inputs.get("feedback"),
+        insights=inputs.get("insights") or None,
     )
     return {"report": report}
 

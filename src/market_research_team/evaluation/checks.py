@@ -9,7 +9,13 @@ call these need real credentials.
 import re
 from typing import Any
 
-from market_research_team.state import AnalyticsResult, PlanItem, ResearchFinding
+from market_research_team.state import (
+    AnalyticsInsight,
+    AnalyticsResult,
+    GuardrailEvent,
+    PlanItem,
+    ResearchFinding,
+)
 
 
 def check_query_count(queries: list[str], *, min_count: int, max_count: int) -> tuple[bool, str]:
@@ -252,3 +258,19 @@ def check_trajectory(
 
     route = " -> ".join(f"{d.get('next')}({d.get('decided_by')})" for d in decisions)
     return not problems, f"route: {route}; " + ("; ".join(problems) or "ok")
+
+
+def check_insights(
+    insights: list[AnalyticsInsight], events: list[GuardrailEvent]
+) -> tuple[bool, str]:
+    """Passes when Analytics handed over at least one valid insight and none
+    was dropped for an ungrounded figure (other drops -- too long, over the
+    limit -- are tidiness, not invention)."""
+
+    ungrounded = [
+        event["detail"]
+        for event in events
+        if event["rule"] == "ungrounded_insight" and event["detail"].startswith("ungrounded figure")
+    ]
+    passed = bool(insights) and not ungrounded
+    return passed, f"{len(insights)} insight(s); ungrounded: {ungrounded or 'none'}"

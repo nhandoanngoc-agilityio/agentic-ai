@@ -258,21 +258,42 @@ def test_analytics_examples_match_golden_dataset() -> None:
     assert examples[0]["outputs"]["plausible_values"] == ANALYTICS_CASES[0].plausible_values
 
 
-def test_target_analytics_calls_run_tool_calling_loop(monkeypatch) -> None:
-    fake_results = [{"metric": "mean", "value": 275000.0, "detail": "d"}]
+def test_target_analytics_returns_results_and_validated_insights(monkeypatch) -> None:
+    fake_results = [{"metric": "mean", "value": 275000.0, "detail": "d", "inputs": [], "id": "r1"}]
+    raw = [{"text": "Mean ACV is $275K.", "result_ids": ["r1"]}]
     monkeypatch.setattr(
         langsmith_eval,
-        "run_tool_calling_loop",
-        lambda llm, tools, objective, findings: fake_results,
+        "run_analysis_loop",
+        lambda llm, tools, objective, findings: (fake_results, raw),
     )
 
     result = langsmith_eval.target_analytics({"objective": "x", "findings": []}, llm=object())
 
-    assert result == {"results": fake_results}
+    assert result["results"] == fake_results
+    assert result["insights"] == raw
+    assert result["insight_events"] == []
+
+
+def test_deterministic_evaluator_analytics_fails_without_insights() -> None:
+    run = _FakeRun(outputs={"results": [{"metric": "mean", "value": 275000.0, "detail": "d"}]})
+    example = _FakeExample(
+        inputs={"findings": []},
+        outputs={"min_tool_calls": 1, "plausible_values": [275000.0], "tolerance": 1.0},
+    )
+
+    result = langsmith_eval.deterministic_evaluator_analytics(run, example)  # type: ignore[arg-type]
+
+    assert result["score"] == 0.0
 
 
 def test_deterministic_evaluator_analytics_passes_on_grounded_value() -> None:
-    run = _FakeRun(outputs={"results": [{"metric": "mean", "value": 275000.0, "detail": "d"}]})
+    run = _FakeRun(
+        outputs={
+            "results": [{"metric": "mean", "value": 275000.0, "detail": "d"}],
+            "insights": [{"text": "A.", "result_ids": ["r1"]}],
+            "insight_events": [],
+        }
+    )
     example = _FakeExample(
         outputs={
             "min_tool_calls": 1,
@@ -323,19 +344,28 @@ def test_reporting_examples_match_golden_dataset() -> None:
 def test_target_reporting_calls_draft_report(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
-    def _draft(objective, findings, results, llm, feedback=None):
+    def _draft(objective, findings, results, llm, feedback=None, insights=None):
         seen["feedback"] = feedback
+        seen["insights"] = insights
         return "# Report body"
 
     monkeypatch.setattr(langsmith_eval, "draft_report", _draft)
+    insight = {"text": "A.", "result_ids": ["r1"]}
 
     result = langsmith_eval.target_reporting(
-        {"objective": "x", "findings": [], "results": [], "feedback": "Add a table."},
+        {
+            "objective": "x",
+            "findings": [],
+            "results": [],
+            "feedback": "Add a table.",
+            "insights": [insight],
+        },
         llm=object(),  # type: ignore[arg-type]
     )
 
     assert result == {"report": "# Report body"}
     assert seen["feedback"] == "Add a table."
+    assert seen["insights"] == [insight]
 
 
 def test_deterministic_evaluator_reporting_passes_when_facts_and_sections_present() -> None:

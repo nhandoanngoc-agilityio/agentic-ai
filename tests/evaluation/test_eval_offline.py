@@ -208,12 +208,42 @@ def test_evaluate_analytics_passes_when_grounded_value_computed() -> None:
             }
         ],
     )
-    final_message = AIMessage(content="Done.", tool_calls=[])
-    llm = _FakeAnalyticsLLM([tool_call_message, final_message])
+    submit = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "submit_analysis",
+                "args": {"insights": [{"text": "Globex deals span $250K.", "result_ids": ["r1"]}]},
+                "id": "call-2",
+                "type": "tool_call",
+            }
+        ],
+    )
+    llm = _FakeAnalyticsLLM([tool_call_message, submit])
 
     results = evaluate_analytics(llm, "fake-provider")  # type: ignore[arg-type]
 
-    assert results[0].passed
+    assert results[0].passed, results[0].detail
+
+
+def test_evaluate_analytics_fails_without_a_submitted_insight() -> None:
+    tool_call_message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "value_range",
+                "args": {"values": [150000, 400000]},
+                "id": "call-1",
+                "type": "tool_call",
+            }
+        ],
+    )
+    llm = _FakeAnalyticsLLM([tool_call_message, AIMessage(content="Done.")])
+
+    results = evaluate_analytics(llm, "fake-provider")  # type: ignore[arg-type]
+
+    assert not results[0].passed
+    assert "0 insight(s)" in results[0].detail
 
 
 def test_evaluate_analytics_fails_when_no_tool_called() -> None:

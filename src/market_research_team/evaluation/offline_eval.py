@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from langchain_core.language_models import BaseChatModel
 
-from market_research_team.agents.analytics.node import run_tool_calling_loop
+from market_research_team.agents.analytics.node import run_analysis_loop
 from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
 from market_research_team.agents.planner.node import make_plan
 from market_research_team.agents.reporting.node import draft_report
@@ -49,6 +49,7 @@ from market_research_team.evaluation.results import EvalResult
 from market_research_team.evaluation.safety_eval import evaluate_safety
 from market_research_team.llm import get_chat_model
 from market_research_team.retrieval.query_rewriter import rewrite_and_expand
+from market_research_team.security.output_filters import validate_insights
 from market_research_team.state import AgentState
 from market_research_team.versioning import build_manifest, git_sha
 
@@ -209,7 +210,10 @@ def evaluate_analytics(
 ) -> list[EvalResult]:
     results = []
     for case in ANALYTICS_CASES:
-        outputs = run_tool_calling_loop(llm, ANALYTICS_TOOLS, case.objective, case.findings)
+        outputs, raw_insights = run_analysis_loop(
+            llm, ANALYTICS_TOOLS, case.objective, case.findings
+        )
+        insights, insight_events = validate_insights(raw_insights, outputs, case.findings)
         count_passed, count_detail = checks.check_min_length(
             outputs, case.min_tool_calls, "tool calls"
         )
@@ -218,8 +222,13 @@ def evaluate_analytics(
         )
         inputs_passed, inputs_detail = checks.check_inputs_grounded(outputs, case.findings)
         current_passed, current_detail = checks.check_inputs_current(outputs, case.findings)
-        passed = count_passed and value_passed and inputs_passed and current_passed
-        detail = f"{count_detail}; {value_detail}; {inputs_detail}; {current_detail}"
+        insight_passed, insight_detail = checks.check_insights(insights, insight_events)
+        passed = (
+            count_passed and value_passed and inputs_passed and current_passed and insight_passed
+        )
+        detail = (
+            f"{count_detail}; {value_detail}; {inputs_detail}; {current_detail}; {insight_detail}"
+        )
         score, judge_note = _safe_judge(
             judge_llm, lambda: judges.judge_analytics(case.findings, outputs, judge_llm)
         )
@@ -251,7 +260,12 @@ def evaluate_reporting(
     results = []
     for case in REPORTING_CASES:
         report = draft_report(
-            case.objective, case.findings, case.results, llm, feedback=case.feedback
+            case.objective,
+            case.findings,
+            case.results,
+            llm,
+            feedback=case.feedback,
+            insights=case.insights or None,
         )
         passed, detail = reporting_checks(report, case)
         score, judge_note = _safe_judge(
