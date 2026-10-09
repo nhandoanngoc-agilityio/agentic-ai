@@ -1,3 +1,8 @@
+---
+entity: Acme
+doc_type: competitor_profile
+as_of: 2026-03
+---
 # Acme Analytics — Competitor Profile
 
 ## Company Overview

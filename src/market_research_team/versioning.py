@@ -124,6 +124,7 @@ def _tools() -> dict[str, Any]:
 
 def _knowledge_static() -> dict[str, Any]:
     from market_research_team.agents.research import node as research
+    from market_research_team.retrieval import evidence
 
     return {
         "embedding_model": settings.embedding_model_name,
@@ -135,6 +136,7 @@ def _knowledge_static() -> dict[str, Any]:
         "retrieval_k_per_query": research._RETRIEVAL_K_PER_QUERY,
         "rerank_top_n": research._RERANK_TOP_N,
         "max_research_findings": settings.run_policy.max_findings,
+        "topic_keywords": _digest(evidence.TOPIC_KEYWORDS),
     }
 
 

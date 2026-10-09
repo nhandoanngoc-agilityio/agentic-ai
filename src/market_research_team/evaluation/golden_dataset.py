@@ -31,6 +31,58 @@ _GLOBEX_PRICING: ResearchFinding = {
     ),
     "relevance_score": 3.5,
 }
+# Dated findings for the freshness cases: same company and topic, two dates.
+_ACME_PRICING_DATED: ResearchFinding = {
+    **_ACME_PRICING,
+    "entity": "Acme",
+    "topic": "pricing",
+    "as_of": "2026-03",
+    "doc_type": "competitor_profile",
+}
+_ACME_PRICING_BENCHMARK: ResearchFinding = {
+    "source": "pricing_benchmark_2026.md",
+    "content": (
+        "Acme now lists its Starter tier at $55 per seat per month, still with up to "
+        "3 connectors and 10M rows per month included."
+    ),
+    "relevance_score": 4.2,
+    "entity": "Acme",
+    "topic": "pricing",
+    "as_of": "2026-08",
+    "doc_type": "benchmark",
+}
+_GLOBEX_PRICING_DATED: ResearchFinding = {
+    **_GLOBEX_PRICING,
+    "entity": "Globex",
+    "topic": "pricing",
+    "as_of": "2026-03",
+    "doc_type": "competitor_profile",
+}
+_GLOBEX_PRICING_2024: ResearchFinding = {
+    "source": "globex_pricing_page_2024.md",
+    "content": (
+        "According to the page, annual contract value runs from $120K to $350K "
+        "depending on data volume."
+    ),
+    "relevance_score": 3.9,
+    "entity": "Globex",
+    "topic": "pricing",
+    "as_of": "2024-11",
+    "doc_type": "pricing_page",
+}
+_MARKET_TEASER: ResearchFinding = {
+    "source": "bi_market_forecast_teaser.md",
+    "content": (
+        "Market size, growth and segment forecasts are available only in the paid "
+        "edition, which subscribers can download from the research portal."
+    ),
+    "relevance_score": 3.0,
+    "entity": "Market",
+    "topic": "other",
+    "as_of": "2026-09",
+    "doc_type": "market_report",
+}
+
 _PRICING_PLAN: list[PlanItem] = [
     {"id": "q1", "question": "What does Acme charge per seat?", "status": "open", "sources": []},
     {
@@ -147,6 +199,18 @@ RETRIEVAL_CASES: list[RetrievalCase] = [
         expected_sources=["competitor_globex.md"],
         min_hits=1,
     ),
+    RetrievalCase(
+        name="initech_pricing_retrieval",
+        objective="What does Initech charge per seat?",
+        expected_sources=["competitor_initech.md", "pricing_benchmark_2026.md"],
+        min_hits=1,
+    ),
+    RetrievalCase(
+        name="embedded_analytics_trends_retrieval",
+        objective="What are the trends in embedded analytics?",
+        expected_sources=["analyst_note_embedded_bi.md"],
+        min_hits=1,
+    ),
 ]
 
 SUPERVISOR_DECISION_CASES: list[SupervisorDecisionCase] = [
@@ -182,6 +246,31 @@ SUPERVISOR_DECISION_CASES: list[SupervisorDecisionCase] = [
         plan=_PRICING_PLAN,
         allowed_decisions=("reporting",),
     ),
+    # The only market finding is a teaser with no figures: the market-size
+    # item is not answered, so research must target it.
+    SupervisorDecisionCase(
+        name="teaser_does_not_answer_market_size",
+        objective="Assess Acme's pricing against the size of the BI market",
+        research_findings=[_ACME_PRICING, _MARKET_TEASER],
+        analytics_results=[],
+        report_path=None,
+        plan=[
+            {
+                "id": "q1",
+                "question": "What does Acme charge per seat?",
+                "status": "open",
+                "sources": [],
+            },
+            {
+                "id": "q2",
+                "question": "What is the BI market's size and growth rate?",
+                "status": "open",
+                "sources": [],
+            },
+        ],
+        allowed_decisions=("research",),
+        focus_keywords=["market"],
+    ),
 ]
 
 PLANNER_CASES: list[PlannerCase] = [
@@ -213,6 +302,16 @@ ANALYTICS_CASES: list[AnalyticsCase] = [
         tolerance=1.0,
         expected_tools=["minimum", "maximum", "value_range", "mean"],
     ),
+    # An archived page gives an older, lower range: compute from the newest.
+    AnalyticsCase(
+        name="globex_acv_midpoint_uses_newest",
+        objective="Compute the midpoint of Globex's typical annual contract value range",
+        findings=[_GLOBEX_PRICING_DATED, _GLOBEX_PRICING_2024],
+        min_tool_calls=1,
+        plausible_values=[275000.0],
+        tolerance=1.0,
+        expected_tools=["mean"],
+    ),
 ]
 
 REPORTING_CASES: list[ReportingCase] = [
@@ -243,12 +342,33 @@ REPORTING_CASES: list[ReportingCase] = [
         feedback="Add a markdown table comparing Acme's and Globex's pricing side by side.",
         require_table=True,
     ),
+    # Two dated sources disagree: state the newest; label any older figure.
+    ReportingCase(
+        name="acme_price_conflict",
+        objective="Summarize Acme's current Starter pricing",
+        findings=[_ACME_PRICING_DATED, _ACME_PRICING_BENCHMARK],
+        results=[],
+        required_facts=["55"],
+    ),
+    ReportingCase(
+        name="globex_acv_conflict",
+        objective="Summarize Globex's typical annual contract value",
+        findings=[_GLOBEX_PRICING_DATED, _GLOBEX_PRICING_2024],
+        results=[],
+        required_facts=["150", "400"],
+    ),
 ]
 
 FULL_PIPELINE_CASES: list[FullPipelineCase] = [
     FullPipelineCase(
         name="acme_vs_globex_full_run",
         objective="Assess Acme vs Globex pricing strategy and recommend a competitive positioning",
+    ),
+    FullPipelineCase(
+        name="three_vendor_pricing",
+        objective=(
+            "Compare pricing across Acme, Initech and Umbrella and recommend a positioning for Acme"
+        ),
     ),
 ]
 

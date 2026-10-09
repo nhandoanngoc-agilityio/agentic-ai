@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, create_model
 from market_research_team.config import settings
 from market_research_team.llm import get_chat_model
 from market_research_team.observability import run_usage_so_far, take_run_usage
+from market_research_team.retrieval.evidence import finding_provenance, superseded
 from market_research_team.security import audit
 from market_research_team.state import AgentState, GuardrailEvent, PlanItem, RouteDecision
 
@@ -161,10 +162,15 @@ def _findings_summary(state: AgentState) -> str:
     findings = state.get("research_findings", [])
     if not findings:
         return "(none)"
-    return "\n".join(
-        f"- [{finding['source']}] {' '.join(finding['content'].split())[:_FINDING_SNIPPET_CHARS]}"
-        for finding in findings
-    )
+    by = superseded(findings)
+    lines = []
+    for finding in findings:
+        # The bracket holds the bare source: coverage citations must match it.
+        provenance = finding_provenance(finding, by)
+        meta = f" ({provenance})" if provenance else ""
+        snippet = " ".join(finding["content"].split())[:_FINDING_SNIPPET_CHARS]
+        lines.append(f"- [{finding['source']}]{meta} {snippet}")
+    return "\n".join(lines)
 
 
 def researchable_items(plan: list[PlanItem]) -> list[PlanItem]:

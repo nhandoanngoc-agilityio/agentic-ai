@@ -49,6 +49,12 @@ class ResearchFinding(TypedDict):
     source: str
     content: str
     relevance_score: float
+    # Provenance from the document header and the chunk's headings (see
+    # retrieval/evidence.py). Absent for undated documents.
+    entity: NotRequired[str]
+    topic: NotRequired[str]
+    as_of: NotRequired[str]
+    doc_type: NotRequired[str]
 
 
 class AnalyticsResult(TypedDict):

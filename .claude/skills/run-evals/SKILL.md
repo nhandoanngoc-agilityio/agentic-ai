@@ -19,9 +19,9 @@ python scripts/run_evals.py --compare          # anthropic and openai side by si
 python scripts/run_evals.py --langsmith        # adds LangSmith dataset sync + LLM-judge; needs LANGSMITH_API_KEY
 ```
 
-Results: exit 0 gate passed, 1 gate failed, 2 config/prerequisite error; JSON report in `data/eval_results/<run id>/results.json`. Categories: query_rewrite, retrieval, supervisor_decision, analytics, tool_selection, reporting, full_pipeline, safety, regression.
+Results: exit 0 gate passed, 1 gate failed, 2 config/prerequisite error; JSON report in `data/eval_results/<run id>/results.json`. Categories: query_rewrite, retrieval, planning, supervisor_decision, analytics, tool_selection, trajectory, reporting, full_pipeline, safety, regression.
 
-Adding a case: append to the matching list in `src/market_research_team/evaluation/golden_dataset.py` (`QueryRewriteCase`, `SupervisorDecisionCase`, `AnalyticsCase`, `ReportingCase`, `FullPipelineCase`, `SafetyCase`; a new safety case also needs a check in `evaluation/safety_eval.py`). Ground expectations in `data/raw/` documents, not invented numbers. Deterministic checks live in `evaluation/checks.py`; the harness is `evaluation/offline_eval.py`.
+Adding a case: append to the matching list in `src/market_research_team/evaluation/golden_dataset.py` (`QueryRewriteCase`, `RetrievalCase`, `PlannerCase`, `SupervisorDecisionCase`, `AnalyticsCase`, `ReportingCase`, `FullPipelineCase`, `SafetyCase`; a new safety case also needs a check in `evaluation/safety_eval.py`). Ground expectations in `data/raw/` documents, not invented numbers. Deterministic checks live in `evaluation/checks.py`; the harness is `evaluation/offline_eval.py`.
 
 Interpreting a failure: the `detail` string names the failed check. A grounded-number failure means the model invented a figure; fix the prompt, not the check.
 

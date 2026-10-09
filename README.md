@@ -45,7 +45,9 @@ a final report to disk via a custom local MCP server.
   merges the new findings in (deduplicated, capped at 10, new ones kept). A
   targeted pass that finds nothing new marks that item unanswerable; if
   nothing clears the rerank floor on the first pass, the run ends with an error
-  instead of retrying.
+  instead of retrying. Each finding carries its source's company, topic and date
+  (`as of YYYY-MM`); when two sources disagree on the same company and topic, the
+  newest wins and the older one is labelled superseded in every prompt.
 - **Analytics Agent Node** — tool-calling agent using native Python
   math/stat functions to evaluate metrics; every reported number is backed
   by a real tool call, and each call's inputs are checked against the findings
@@ -83,6 +85,7 @@ draft awaiting its write are kept.
 | End on error or discard, first research pass, visit cap, finish after the write | Code rules |
 | Stop gathering when the run's token budget is spent, and report what it has | Code rule (`RunPolicy.max_run_tokens`) |
 | Which math tool, with which inputs | The model (Analytics), inputs checked against the findings |
+| Which of two conflicting sources is current | Code: same company and topic, later date, and the newer one states figures (`retrieval/evidence.py`) |
 | Whether the report is written | A person (approval interrupt) |
 | What earlier reviewers asked for, carried into new drafts | Long-term memory (`memory.py`, LangGraph store): reviewer feedback from past runs, sanitized when stored |
 
@@ -193,7 +196,16 @@ Verified against this repo's current state, not aspirational:
   `scripts/ci_checks.sh`; `scripts/ci_local.sh` runs the same job locally on a clean copy of the
   repo (Python 3.11, fresh `.venv`, no `.env`, minimal environment) before you push. Use
   `--worktree` to include uncommitted changes.
-- **Release gate, approved baseline (2026-10-07, 10:05 UTC)**: `run_evals.py --provider openai
+- **Release gate, approved baseline (2026-10-09, 03:09 UTC)**: `run_evals.py --provider openai
+  --langsmith --repeats 3 --update-baseline` on `corpus-freshness` (agent `0.1.0+3a8c2f83d050`:
+  12 dated documents, newest source wins, older figures labelled). Gate passed: task success
+  0.970, safety 1.0, tool accuracy 1.0, judged quality 0.851. 11.5 model calls per graph run
+  (supervisor 3.7, query rewriter 3.2, analytics 2.2, report draft 1.5, planner 1.0), cost
+  about $0.0030 per run (+9.5%: prompts now carry source dates), median run 24.0 s, p95 34.6 s
+  (cap 120 s). The two failures are regression case `70f3828994f2`, which still expects
+  Acme's old $49 (1 of 3 repeats), and the known-unstable
+  `supervisor_decision/plan_covered_analysis_done` (1 of 3 repeats).
+- **Previous baseline (2026-10-07, 10:05 UTC)**: `run_evals.py --provider openai
   --langsmith --repeats 3 --update-baseline` on `harness-polish` (agent `0.1.0+ac2f6794297e`:
   report self-check, no report overwrite, RunPolicy). Gate passed: task success 0.976, safety
   1.0, tool accuracy 1.0, judged quality 0.804. 11.4 model calls per graph run (supervisor
@@ -347,7 +359,12 @@ cover the Postgres checkpointer extra.
 ### 3. Seed the vector store
 
 The Research Agent retrieves against a local Chroma index built from the
-sample competitor/market documents in `data/raw/`:
+12 sample documents in `data/raw/`: six competitor profiles, a pricing
+benchmark, an archived pricing page, an analyst note, a customer-review digest
+and two market reports. Each starts with a header naming its company
+(`entity`), `doc_type` and `as_of` date. Two conflicts are built in on purpose:
+the benchmark lists Acme's Starter tier at $55 against the profile's $49, and
+an archived 2024 Globex page gives a lower contract range than the profile.
 
 ```bash
 python scripts/seed_vectorstore.py

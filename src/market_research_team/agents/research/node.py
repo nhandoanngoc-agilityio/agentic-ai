@@ -48,6 +48,27 @@ def filter_injected_chunks(
     return kept, events
 
 
+def _to_finding(document: Document, score: float) -> ResearchFinding:
+    """A finding with the chunk's provenance (entity, topic, date, type) when
+    its document had a header; undated chunks give the plain three fields."""
+
+    metadata = document.metadata
+    finding: ResearchFinding = {
+        "source": metadata.get("source", "unknown"),
+        "content": document.page_content,
+        "relevance_score": score,
+    }
+    if metadata.get("entity"):
+        finding["entity"] = str(metadata["entity"])
+    if metadata.get("topic"):
+        finding["topic"] = str(metadata["topic"])
+    if metadata.get("as_of"):
+        finding["as_of"] = str(metadata["as_of"])
+    if metadata.get("doc_type"):
+        finding["doc_type"] = str(metadata["doc_type"])
+    return finding
+
+
 def run_research_pipeline(
     objective: str,
     focus: str | None = None,
@@ -98,14 +119,7 @@ def run_research_pipeline(
     )
     reranked, events = filter_injected_chunks(reranked)
 
-    findings: list[ResearchFinding] = [
-        {
-            "source": document.metadata.get("source", "unknown"),
-            "content": document.page_content,
-            "relevance_score": score,
-        }
-        for document, score in reranked
-    ]
+    findings = [_to_finding(document, score) for document, score in reranked]
     return findings, len(queries), len(candidates), events
 
 

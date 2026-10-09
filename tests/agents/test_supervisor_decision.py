@@ -307,3 +307,16 @@ def test_the_model_can_only_choose_an_allowed_step() -> None:
     assert schema(next="analytics", coverage=[]).next == "analytics"
     with pytest.raises(ValueError):
         schema(next="reporting", coverage=[])
+
+
+def test_findings_summary_keeps_the_bare_source_in_brackets_for_citation() -> None:
+    old = {**_FINDING, "source": "acme.md", "content": "Starter $49.", "entity": "Acme"}
+    old |= {"topic": "pricing", "as_of": "2026-03"}
+    new = {**old, "source": "bench.md", "content": "Starter $55.", "as_of": "2026-08"}
+
+    summary = router_module._findings_summary({"research_findings": [old, new]})  # type: ignore[arg-type]
+
+    assert summary.splitlines() == [
+        "- [acme.md] (Acme · pricing · as of 2026-03 (superseded by bench.md)) Starter $49.",
+        "- [bench.md] (Acme · pricing · as of 2026-08) Starter $55.",
+    ]

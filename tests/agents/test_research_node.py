@@ -226,3 +226,41 @@ def test_pipeline_drops_held_chunks_before_reranking_against_the_gap(
     assert [d.page_content for d in seen["candidates"]] == ["The BI market grows 11% a year."]
     assert [f["source"] for f in findings] == ["m.md"]
     assert candidate_count == 1
+
+
+def test_findings_carry_the_chunk_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from langchain_core.documents import Document
+
+    dated = Document(
+        page_content="Acme Starter is $55.",
+        metadata={
+            "source": "bench.md",
+            "entity": "Acme",
+            "topic": "pricing",
+            "as_of": "2026-08",
+            "doc_type": "benchmark",
+        },
+    )
+    plain = Document(page_content="Undated.", metadata={"source": "old.md"})
+    module = research_node_module
+    monkeypatch.setattr(module, "get_chat_model", lambda: None)
+    monkeypatch.setattr(module, "rewrite_and_expand", lambda objective, llm, focus=None: ["q"])
+    monkeypatch.setattr(module, "load_vectorstore", lambda **_kwargs: None)
+    monkeypatch.setattr(module, "retrieve_for_queries_cached", lambda *a, **k: [dated, plain])
+    monkeypatch.setattr(module, "cached_cross_encoder", lambda name: None)
+    monkeypatch.setattr(
+        module, "rerank_cached", lambda query, candidates, *a, **k: [(d, 1.0) for d in candidates]
+    )
+
+    findings, *_ = module.run_research_pipeline("Acme pricing")
+
+    assert findings[0] == {
+        "source": "bench.md",
+        "content": "Acme Starter is $55.",
+        "relevance_score": 1.0,
+        "entity": "Acme",
+        "topic": "pricing",
+        "as_of": "2026-08",
+        "doc_type": "benchmark",
+    }
+    assert findings[1] == {"source": "old.md", "content": "Undated.", "relevance_score": 1.0}

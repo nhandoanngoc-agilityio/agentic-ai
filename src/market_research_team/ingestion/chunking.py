@@ -14,6 +14,8 @@ from typing import Any, Literal
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
+from market_research_team.retrieval.evidence import headings_of, resolve_entity, topic_for
+
 _HEADERS_TO_SPLIT_ON = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 
 ChunkLevel = Literal["section", "leaf"]
@@ -41,6 +43,7 @@ def chunk_document(
     section_chunk_size: int = 2000,
     leaf_chunk_size: int = 800,
     leaf_chunk_overlap: int = 120,
+    known_entities: frozenset[str] = frozenset(),
 ) -> list[HierarchicalChunk]:
     """Split one loaded document into section (parent) and leaf (child) chunks."""
 
@@ -69,6 +72,11 @@ def chunk_document(
             section_id = f"{doc_id}::s{section_index}"
             section_index += 1
             section_metadata = {**document.metadata, **section.metadata, "doc_id": doc_id}
+            headings = headings_of(section.metadata)
+            section_metadata["topic"] = topic_for(headings)
+            entity = resolve_entity(document.metadata.get("entity"), headings, known_entities)
+            if entity is not None:
+                section_metadata["entity"] = entity
             chunks.append(
                 HierarchicalChunk(
                     id=section_id,
@@ -103,6 +111,14 @@ def chunk_documents(
     leaf_chunk_size: int = 800,
     leaf_chunk_overlap: int = 120,
 ) -> list[HierarchicalChunk]:
+    # Competitors named by a profile: the vendor headings a multi-vendor
+    # document (benchmark, review digest) is attributed by.
+    known = frozenset(
+        str(document.metadata["entity"])
+        for document in documents
+        if document.metadata.get("doc_type") == "competitor_profile"
+        and document.metadata.get("entity")
+    )
     all_chunks: list[HierarchicalChunk] = []
     for document in documents:
         all_chunks.extend(
@@ -111,6 +127,7 @@ def chunk_documents(
                 section_chunk_size=section_chunk_size,
                 leaf_chunk_size=leaf_chunk_size,
                 leaf_chunk_overlap=leaf_chunk_overlap,
+                known_entities=known,
             )
         )
     return all_chunks

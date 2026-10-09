@@ -1,3 +1,8 @@
+---
+entity: Market
+doc_type: market_report
+as_of: 2026-01
+---
 # Business Intelligence Market — Overview
 
 ## Market Size and Growth

@@ -47,6 +47,10 @@ python scripts/prune_data.py [--days 90] [--apply]                 # retention, 
   output filters, shared regex patterns, audit log) are in `security/`; a node that blocks,
   drops or redacts something returns a `guardrail_events` entry. Tests mirror these areas
   under `tests/<area>/`.
+- Documents in `data/raw/` start with a front-matter header (`entity`, `doc_type`,
+  `as_of`); `tests/ingestion/test_corpus.py` checks it and that only the two built-in
+  conflicts leave stale figures. A newer document that covers a vendor's topic must
+  restate all of that topic's figures, or the older ones get marked outdated.
 - Agent version = `<pyproject version>+<fingerprint>` from `versioning.py`, which hashes
   prompts (`SYSTEM_PROMPT` in each agent), model + params, tool schemas, knowledge/index
   and safety limits. It is stamped on Langfuse traces, audit lines and eval results. A new

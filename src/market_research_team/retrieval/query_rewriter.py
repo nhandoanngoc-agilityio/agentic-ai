@@ -21,7 +21,7 @@ SYSTEM_PROMPT = (
     "document matches it. Keep each query short and specific — phrase them "
     "the way the terms would actually appear in the source documents, not "
     "as questions. Do not add years, dates or figures that "
-    "aren't in the objective or gap: the documents carry no report dates, so "
+    "aren't in the objective or gap: documents are dated, but "
     "an invented year only pulls retrieval off target. If a <research_gap> "
     "is given, earlier searches already covered the objective broadly: target "
     "every query at that gap instead of repeating the general angles. The "

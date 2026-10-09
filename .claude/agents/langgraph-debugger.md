@@ -8,7 +8,7 @@ tools: Read, Grep, Glob, Bash
 You debug the graph in `src/market_research_team/`. Follow systematic debugging: reproduce, locate, explain, then propose the minimal fix. Do not edit files.
 
 Where to look:
-- Routing: `agents/supervisor/router.py` (`decide_next_step`, `route_from_supervisor`, visit cap) and the edge map in `graph.py`.
+- Routing: `agents/supervisor/router.py` (`decide_route`, `route_from_supervisor`, visit cap in `RunPolicy.max_routing_visits`) and the edge map in `graph.py`.
 - State: `state.py` (`AgentState`, `error`, `report_discarded`).
 - Error containment: `guardrails.py` (`with_error_boundary` records `error` and routes back to the supervisor).
 - Resume/interrupt: `run_graph` in `graph.py`, `agents/reporting/node.py`, `checkpointing/`.

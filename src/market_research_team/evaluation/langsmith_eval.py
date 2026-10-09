@@ -218,11 +218,14 @@ def deterministic_evaluator_analytics(run: Any, example: Any) -> dict[str, Any]:
     inputs_passed, inputs_detail = checks.check_inputs_grounded(
         results, (example.inputs or {}).get("findings", [])
     )
-    passed = count_passed and value_passed and inputs_passed
+    current_passed, current_detail = checks.check_inputs_current(
+        results, (example.inputs or {}).get("findings", [])
+    )
+    passed = count_passed and value_passed and inputs_passed and current_passed
     return {
         "key": "deterministic",
         "score": 1.0 if passed else 0.0,
-        "comment": f"{count_detail}; {value_detail}; {inputs_detail}",
+        "comment": f"{count_detail}; {value_detail}; {inputs_detail}; {current_detail}",
     }
 
 
@@ -272,6 +275,10 @@ def deterministic_evaluator_reporting(run: Any, example: Any) -> dict[str, Any]:
     required_facts = expected.get("required_facts", [])
     facts_passed, facts_detail = checks.check_contains_all(report, required_facts)
     passed, comment = sections_passed and facts_passed, f"{sections_detail}; {facts_detail}"
+    fresh_passed, fresh_detail = checks.check_freshness(
+        report, (example.inputs or {}).get("findings", [])
+    )
+    passed, comment = passed and fresh_passed, f"{comment}; {fresh_detail}"
     if expected.get("require_table"):
         table_passed, table_detail = checks.check_markdown_table(report)
         passed, comment = passed and table_passed, f"{comment}; {table_detail}"

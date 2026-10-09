@@ -36,6 +36,15 @@ data/eval_results/*
 !data/raw/competitor_acme.md
 !data/raw/competitor_globex.md
 !data/raw/market_overview.md
+!data/raw/competitor_initech.md
+!data/raw/competitor_umbrella.md
+!data/raw/competitor_hooli.md
+!data/raw/competitor_vandelay.md
+!data/raw/pricing_benchmark_2026.md
+!data/raw/analyst_note_embedded_bi.md
+!data/raw/customer_review_digest.md
+!data/raw/globex_pricing_page_2024.md
+!data/raw/bi_market_forecast_teaser.md
 !data/processed/.gitkeep
 !data/vectorstore/.gitkeep
 !data/eval_results/.gitkeep
