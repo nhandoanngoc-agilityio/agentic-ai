@@ -200,3 +200,9 @@ def test_the_insight_length_limit_is_in_the_manifest():
     safety = versioning.build_manifest()["components"]["memory_safety"]
 
     assert safety["insight_max_chars"] == 300
+
+
+def test_the_submit_tool_schema_is_in_the_manifest():
+    analytics = versioning.build_manifest()["components"]["tools"]["analytics"]
+
+    assert "submit_analysis" in analytics

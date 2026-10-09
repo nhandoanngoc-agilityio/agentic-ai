@@ -3,6 +3,7 @@
 import statistics
 
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 
 
 @tool
@@ -122,3 +123,22 @@ ANALYTICS_TOOLS = [
     percent_change,
     compound_growth_rate,
 ]
+
+
+SUBMIT_TOOL_NAME = "submit_analysis"
+
+
+class InsightArg(BaseModel):
+    text: str = Field(description="One short claim the computed results support.")
+    result_ids: list[str] = Field(description='IDs of the results it rests on, e.g. ["r1", "r3"].')
+
+
+@tool(SUBMIT_TOOL_NAME)
+def submit_analysis(insights: list[InsightArg]) -> str:
+    """Finish the analysis: hand the report up to 5 short insights.
+
+    Call this once, when you have computed what the objective needs. Each
+    insight cites the result IDs (r1, r2, ...) it rests on and states only
+    figures that a result or a finding gives.
+    """
+    return "submitted"

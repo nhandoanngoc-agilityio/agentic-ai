@@ -370,3 +370,136 @@ def test_an_input_only_an_outdated_source_supports_is_flagged() -> None:
     events = analytics_node_module.tool_input_events(results, [old, new])  # type: ignore[arg-type]
 
     assert [e["rule"] for e in events] == ["stale_tool_input"]
+
+
+def _call(name: str, args: dict, call_id: str) -> dict:
+    return {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+
+
+class _RecordingBoundLLM(_ScriptedBoundLLM):
+    def __init__(self, responses: list[AIMessage]) -> None:
+        super().__init__(responses)
+        self.seen: list[list[object]] = []
+
+    def invoke(self, _messages: list[object], config: object = None) -> AIMessage:
+        self.seen.append(list(_messages))
+        return super().invoke(_messages, config)
+
+
+class _RecordingLLM:
+    def __init__(self, responses: list[AIMessage]) -> None:
+        self.bound = _RecordingBoundLLM(responses)
+        self.tool_names: list[str] = []
+
+    def bind_tools(self, tools: list[object]) -> _RecordingBoundLLM:
+        self.tool_names = [getattr(tool, "name", "") for tool in tools]
+        return self.bound
+
+
+_INSIGHT = {"text": "The mean is 4.", "result_ids": ["r1"]}
+
+
+def _ai(*calls: dict) -> AIMessage:
+    return AIMessage(content="", tool_calls=list(calls))  # type: ignore[arg-type]
+
+
+def test_results_get_ids_in_call_order_and_the_model_sees_them() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _RecordingLLM(
+        [
+            _ai(_call("mean", {"values": [2, 6]}, "a"), _call("mean", {"values": [1, 3]}, "b")),
+            AIMessage(content="Done."),
+        ]
+    )
+
+    results, raw = run_analysis_loop(llm, [mean], "x", [])  # type: ignore[arg-type]
+
+    assert [r.get("id") for r in results] == ["r1", "r2"]
+    replies = [m.content for m in llm.bound.seen[-1] if m.__class__.__name__ == "ToolMessage"]  # type: ignore[attr-defined]
+    assert replies == ["r1 = 4.0", "r2 = 2.0"]
+    assert raw is None
+    assert "submit_analysis" in llm.tool_names
+
+
+def test_a_submission_is_returned_and_ends_the_loop() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _RecordingLLM(
+        [
+            _ai(_call("mean", {"values": [2, 6]}, "a")),
+            _ai(_call("submit_analysis", {"insights": [_INSIGHT]}, "s")),
+            AIMessage(content="never reached"),
+        ]
+    )
+
+    results, raw = run_analysis_loop(llm, [mean], "x", [])  # type: ignore[arg-type]
+
+    assert len(results) == 1
+    assert raw == [_INSIGHT]
+    assert len(llm.bound.seen) == 2
+
+
+def test_math_runs_before_a_submission_in_the_same_turn() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _RecordingLLM(
+        [
+            _ai(
+                _call("submit_analysis", {"insights": [_INSIGHT]}, "s"),
+                _call("mean", {"values": [2, 6]}, "a"),
+            )
+        ]
+    )
+
+    results, raw = run_analysis_loop(llm, [mean], "x", [])  # type: ignore[arg-type]
+
+    assert [r.get("id") for r in results] == ["r1"]
+    assert raw == [_INSIGHT]
+
+
+def test_the_first_of_two_submissions_is_used() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    second = {"text": "Other.", "result_ids": ["r1"]}
+    llm = _RecordingLLM(
+        [
+            _ai(
+                _call("mean", {"values": [2, 6]}, "a"),
+                _call("submit_analysis", {"insights": [_INSIGHT]}, "s1"),
+                _call("submit_analysis", {"insights": [second]}, "s2"),
+            )
+        ]
+    )
+
+    _, raw = run_analysis_loop(llm, [mean], "x", [])  # type: ignore[arg-type]
+
+    assert raw == [_INSIGHT]
+
+
+def test_no_submission_before_the_cap_returns_none() -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+
+    llm = _RepeatingLLM(_ai(_call("mean", {"values": [2]}, "a")))
+
+    results, raw = run_analysis_loop(llm, [mean], "x", [], max_iterations=2)  # type: ignore[arg-type]
+
+    assert len(results) == 2 and raw is None
+
+
+def test_a_submission_is_not_a_result_or_an_audited_tool_call(monkeypatch) -> None:
+    from market_research_team.agents.analytics.node import run_analysis_loop
+    from market_research_team.security import audit as audit_module
+
+    recorded: list[str] = []
+    monkeypatch.setattr(audit_module, "record", lambda event, *a, **k: recorded.append(event))
+    llm = _RecordingLLM([_ai(_call("submit_analysis", {"insights": [_INSIGHT]}, "s"))])
+
+    results, _ = run_analysis_loop(llm, [mean], "x", [])  # type: ignore[arg-type]
+
+    assert results == []
+    assert "tool_call" not in recorded
+
+
+def test_the_prompt_asks_for_a_submission() -> None:
+    assert "submit_analysis" in analytics_node_module.SYSTEM_PROMPT

@@ -104,10 +104,10 @@ def _tools() -> dict[str, Any]:
     grouping is the permission model (analytics can't write files, reporting
     can't compute)."""
 
-    from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS
+    from market_research_team.agents.analytics.tools import ANALYTICS_TOOLS, submit_analysis
     from market_research_team.mcp_server import fs_server
 
-    analytics = {tool.name: _digest(tool.args) for tool in ANALYTICS_TOOLS}
+    analytics = {tool.name: _digest(tool.args) for tool in [*ANALYTICS_TOOLS, submit_analysis]}
     mcp_tools = {
         tool.name: _digest(tool.parameters)
         for tool in fs_server.mcp_server._tool_manager.list_tools()
